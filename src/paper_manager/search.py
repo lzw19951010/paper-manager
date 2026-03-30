@@ -1,4 +1,4 @@
-"""ChromaDB-backed semantic search (RAG) over paper notes."""
+"""ChromaDB-backed hybrid search (exact + semantic) over paper notes."""
 from __future__ import annotations
 
 import re
@@ -6,6 +6,12 @@ from pathlib import Path
 
 import chromadb
 import yaml
+from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
+
+def _get_embedding_function() -> SentenceTransformerEmbeddingFunction:
+    """Return the shared embedding function (BAAI/bge-small-zh-v1.5)."""
+    return SentenceTransformerEmbeddingFunction(model_name="BAAI/bge-small-zh-v1.5")
 
 
 def get_collection(chromadb_dir: Path) -> chromadb.Collection:
@@ -15,10 +21,11 @@ def get_collection(chromadb_dir: Path) -> chromadb.Collection:
         chromadb_dir: Directory where ChromaDB stores its data.
 
     Returns:
-        A ChromaDB Collection named "papers".
+        A ChromaDB Collection named "papers_v2".
     """
     client = chromadb.PersistentClient(path=str(chromadb_dir))
-    return client.get_or_create_collection("papers")
+    ef = _get_embedding_function()
+    return client.get_or_create_collection("papers_v2", embedding_function=ef)
 
 
 def parse_frontmatter(md_content: str) -> tuple[dict, str]:
@@ -110,6 +117,9 @@ def index_paper(md_path: Path, collection: chromadb.Collection) -> None:
     chunks. Any existing chunks for this arxiv_id are deleted first to avoid
     stale entries on re-index.
 
+    A dedicated metadata chunk (chunk_index -1) is also upserted containing
+    title, arxiv_id, keywords, and tldr so exact-title searches can match it.
+
     Args:
         md_path: Path to the paper's .md file.
         collection: ChromaDB collection to index into.
@@ -125,6 +135,16 @@ def index_paper(md_path: Path, collection: chromadb.Collection) -> None:
     else:
         tags_str = str(tags_raw) if tags_raw else ""
 
+    # Build metadata-header string for keyword searchability
+    keywords_raw = frontmatter.get("keywords", [])
+    if isinstance(keywords_raw, list):
+        keywords_str = ", ".join(str(k) for k in keywords_raw)
+    else:
+        keywords_str = str(keywords_raw) if keywords_raw else ""
+    tldr: str = frontmatter.get("tldr", "") or ""
+
+    meta_text = f"Title: {title}\narxiv_id: {arxiv_id}\nKeywords: {keywords_str}\nTLDR: {tldr}"
+
     # Delete existing chunks for this paper to avoid stale data
     try:
         existing = collection.get(where={"arxiv_id": {"$eq": arxiv_id}})
@@ -135,10 +155,27 @@ def index_paper(md_path: Path, collection: chromadb.Collection) -> None:
 
     chunks = chunk_document(body)
     if not chunks:
-        return
+        # Still upsert the metadata chunk even if body is empty
+        chunks = []
 
-    ids = [f"{arxiv_id}__chunk_{i}" for i in range(len(chunks))]
-    metadatas = [
+    # Prepend metadata header to the first body chunk
+    if chunks:
+        chunks[0] = meta_text + "\n\n" + chunks[0]
+
+    # Build all documents: metadata chunk first (chunk_index=-1), then body chunks
+    all_docs: list[str] = [meta_text] + chunks
+    all_ids: list[str] = [f"{arxiv_id}__chunk_-1"] + [
+        f"{arxiv_id}__chunk_{i}" for i in range(len(chunks))
+    ]
+    all_metadatas: list[dict] = [
+        {
+            "arxiv_id": arxiv_id,
+            "title": title,
+            "tags": tags_str,
+            "chunk_index": -1,
+            "source": str(md_path),
+        }
+    ] + [
         {
             "arxiv_id": arxiv_id,
             "title": title,
@@ -149,20 +186,27 @@ def index_paper(md_path: Path, collection: chromadb.Collection) -> None:
         for i in range(len(chunks))
     ]
 
-    collection.upsert(ids=ids, documents=chunks, metadatas=metadatas)
+    collection.upsert(ids=all_ids, documents=all_docs, metadatas=all_metadatas)
 
 
 def search_papers(
     query: str,
     collection: chromadb.Collection,
     n_results: int = 5,
+    min_score: float = 0.3,
 ) -> list[dict]:
-    """Semantic search over indexed papers.
+    """Hybrid search (exact match + semantic) over indexed papers.
+
+    Phase 1 performs exact/substring matching on title and arxiv_id metadata.
+    Phase 2 performs semantic vector search. Results are merged and deduplicated
+    by arxiv_id, with exact-match papers receiving a score bonus. Results below
+    min_score are excluded.
 
     Args:
-        query: Natural language search query.
+        query: Natural language or keyword search query.
         collection: ChromaDB collection to search.
         n_results: Number of results to retrieve from ChromaDB before dedup.
+        min_score: Minimum score threshold; results below this are dropped.
 
     Returns:
         List of result dicts sorted by score descending, deduplicated by arxiv_id.
@@ -170,7 +214,36 @@ def search_papers(
     """
     if collection.count() == 0:
         return []
-    results = collection.query(query_texts=[query], n_results=n_results)
+
+    query_lower = query.lower()
+
+    # ---------------------------------------------------------------------------
+    # Phase 1: Exact / substring match on title and arxiv_id metadata
+    # ---------------------------------------------------------------------------
+    exact_arxiv_ids: set[str] = set()
+    try:
+        all_meta = collection.get(include=["metadatas"])
+        seen_for_exact: set[str] = set()
+        for meta in (all_meta.get("metadatas") or []):
+            aid = meta.get("arxiv_id", "")
+            if aid in seen_for_exact:
+                continue
+            title_val = meta.get("title", "") or ""
+            if (
+                query_lower in title_val.lower()
+                or query_lower in aid.lower()
+            ):
+                exact_arxiv_ids.add(aid)
+            seen_for_exact.add(aid)
+    except Exception:
+        pass
+
+    # ---------------------------------------------------------------------------
+    # Phase 2: Semantic vector search
+    # ---------------------------------------------------------------------------
+    # Fetch more results than requested to ensure good dedup pool
+    fetch_n = max(n_results * 3, 15)
+    results = collection.query(query_texts=[query], n_results=min(fetch_n, collection.count()))
 
     documents = results.get("documents", [[]])[0]
     metadatas = results.get("metadatas", [[]])[0]
@@ -181,6 +254,11 @@ def search_papers(
     for doc, meta, dist in zip(documents, metadatas, distances):
         arxiv_id = meta.get("arxiv_id", "")
         score = 1.0 / (1.0 + dist)
+
+        # Boost exact matches
+        if arxiv_id in exact_arxiv_ids:
+            score = min(1.0, score + 0.3)
+
         matched_section = doc[:200] + "..." if len(doc) > 200 else doc
 
         if arxiv_id not in best or score > best[arxiv_id]["score"]:
@@ -192,7 +270,34 @@ def search_papers(
                 "tags": meta.get("tags", ""),
             }
 
-    return sorted(best.values(), key=lambda r: r["score"], reverse=True)
+    # Ensure exact-match papers always appear even if outside semantic top-N
+    for arxiv_id in exact_arxiv_ids:
+        if arxiv_id not in best:
+            # Fetch this paper's metadata chunk directly
+            try:
+                got = collection.get(
+                    where={"arxiv_id": {"$eq": arxiv_id}},
+                    include=["metadatas", "documents"],
+                )
+                if got and got.get("ids"):
+                    meta = got["metadatas"][0]
+                    doc = (got.get("documents") or [""])[0]
+                    matched_section = doc[:200] + "..." if len(doc) > 200 else doc
+                    best[arxiv_id] = {
+                        "title": meta.get("title", ""),
+                        "arxiv_id": arxiv_id,
+                        "score": 0.6,  # Default exact-match score
+                        "matched_section": matched_section,
+                        "tags": meta.get("tags", ""),
+                    }
+            except Exception:
+                pass
+
+    # Apply min_score filter, then sort
+    filtered = [r for r in best.values() if r["score"] >= min_score]
+
+    # Return top n_results
+    return sorted(filtered, key=lambda r: r["score"], reverse=True)[:n_results]
 
 
 def reindex_all(papers_dir: Path, collection: chromadb.Collection) -> int:

@@ -294,7 +294,7 @@ def search(
     results = search_papers(query, collection, n_results=n)
 
     if not results:
-        typer.echo("No results found.")
+        typer.echo("No matching papers found. The paper may not be indexed yet.")
         return
 
     typer.echo(f"\nSearch results for: {query!r}\n")

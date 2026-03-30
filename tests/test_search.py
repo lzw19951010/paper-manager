@@ -7,6 +7,7 @@ import chromadb
 import pytest
 
 from paper_manager.search import (
+    _get_embedding_function,
     chunk_document,
     index_paper,
     parse_frontmatter,
@@ -22,7 +23,8 @@ from paper_manager.search import (
 def _make_collection() -> chromadb.Collection:
     """Return a fresh in-memory ChromaDB collection for each test."""
     client = chromadb.EphemeralClient()
-    return client.get_or_create_collection("test_papers")
+    ef = _get_embedding_function()
+    return client.get_or_create_collection("test_papers", embedding_function=ef)
 
 
 def _write_paper(tmp_path: Path, filename: str, content: str) -> Path:
@@ -197,3 +199,177 @@ def test_search_deduplicates_by_arxiv_id(tmp_path: Path):
     # All results belong to the same paper — deduplicated to exactly 1
     assert len(results) == 1
     assert arxiv_ids[0] == "2301.00001"
+
+
+# ---------------------------------------------------------------------------
+# Hybrid Search Tests
+# ---------------------------------------------------------------------------
+
+class TestHybridSearch:
+    """Tests for improved hybrid search (exact + semantic)."""
+
+    def test_exact_title_match(self, tmp_path: Path):
+        """Search by exact title should return that paper as #1."""
+        content = (
+            "---\narxiv_id: '2412.00001'\ntitle: 'OLMo 3'\ntags:\n  - llm\n---\n\n"
+            "## Introduction\n\nOLMo 3 is an open language model.\n"
+        )
+        md_path = _write_paper(tmp_path, "2412.00001.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        results = search_papers("OLMo 3", collection, n_results=5)
+
+        assert len(results) >= 1
+        assert results[0]["arxiv_id"] == "2412.00001"
+
+    def test_partial_title_match(self, tmp_path: Path):
+        """Search by partial title should find matching papers."""
+        content_v3 = (
+            "---\narxiv_id: '2412.10001'\ntitle: 'DeepSeek-V3 Technical Report'\n"
+            "tags:\n  - llm\n---\n\n## Introduction\n\nDeepSeek-V3 technical details.\n"
+        )
+        content_r1 = (
+            "---\narxiv_id: '2501.12948'\ntitle: 'DeepSeek-R1 Report'\n"
+            "tags:\n  - reasoning\n---\n\n## Introduction\n\nDeepSeek-R1 reasoning model.\n"
+        )
+        _write_paper(tmp_path, "v3.md", content_v3)
+        _write_paper(tmp_path, "r1.md", content_r1)
+        collection = _make_collection()
+        index_paper(tmp_path / "v3.md", collection)
+        index_paper(tmp_path / "r1.md", collection)
+
+        results = search_papers("deepseek", collection, n_results=5)
+
+        arxiv_ids = {r["arxiv_id"] for r in results}
+        assert "2412.10001" in arxiv_ids
+        assert "2501.12948" in arxiv_ids
+
+    def test_arxiv_id_search(self, tmp_path: Path):
+        """Search by arxiv_id should return the corresponding paper."""
+        content = (
+            "---\narxiv_id: '2512.13961'\ntitle: 'Some Paper'\ntags:\n  - misc\n---\n\n"
+            "## Introduction\n\nThis paper describes something.\n"
+        )
+        md_path = _write_paper(tmp_path, "2512.13961.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        results = search_papers("2512.13961", collection, n_results=5)
+
+        assert len(results) >= 1
+        assert results[0]["arxiv_id"] == "2512.13961"
+
+    def test_keyword_search(self, tmp_path: Path):
+        """Search by keyword in frontmatter should find papers with that keyword."""
+        content = (
+            "---\narxiv_id: '2412.00002'\ntitle: 'MoE Paper'\n"
+            "keywords:\n  - mixture-of-experts\n  - training\ntags:\n  - llm\n---\n\n"
+            "## Introduction\n\nThis paper explores mixture-of-experts training.\n"
+        )
+        md_path = _write_paper(tmp_path, "2412.00002.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        results = search_papers("mixture-of-experts", collection, n_results=5)
+
+        assert len(results) >= 1
+        assert results[0]["arxiv_id"] == "2412.00002"
+
+    def test_semantic_search_chinese(self, tmp_path: Path):
+        """Chinese semantic search should find relevant papers."""
+        content = (
+            "---\narxiv_id: '2412.00003'\ntitle: 'MoE Chinese Paper'\n"
+            "tags:\n  - llm\n---\n\n"
+            "## 介绍\n\n本文研究混合专家模型的训练效率与性能优化方法。\n\n"
+            "## 方法\n\n通过改进路由策略提升混合专家模型的计算效率。\n"
+        )
+        md_path = _write_paper(tmp_path, "2412.00003.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        results = search_papers("混合专家模型训练效率", collection, n_results=5)
+
+        assert len(results) >= 1
+        assert results[0]["arxiv_id"] == "2412.00003"
+
+    def test_semantic_search_english(self, tmp_path: Path):
+        """English semantic search should find relevant papers."""
+        content = (
+            "---\narxiv_id: '2412.00004'\ntitle: 'RL Reasoning Paper'\n"
+            "tags:\n  - reasoning\n---\n\n"
+            "## Introduction\n\nThis paper uses reinforcement learning to improve reasoning.\n\n"
+            "## Method\n\nWe train a language model with RLHF to enhance logical reasoning.\n"
+        )
+        md_path = _write_paper(tmp_path, "2412.00004.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        results = search_papers("reinforcement learning reasoning", collection, n_results=5)
+
+        assert len(results) >= 1
+        assert results[0]["arxiv_id"] == "2412.00004"
+
+    def test_exact_match_scores_higher(self, tmp_path: Path):
+        """Exact title match should score higher than semantic-only match."""
+        content_exact = (
+            "---\narxiv_id: '1706.03762'\ntitle: 'Attention Is All You Need'\n"
+            "tags:\n  - transformers\n---\n\n"
+            "## Introduction\n\nTransformer architecture using self-attention.\n"
+        )
+        content_survey = (
+            "---\narxiv_id: '2001.00001'\ntitle: 'Transformer Survey'\n"
+            "tags:\n  - survey\n---\n\n"
+            "## Introduction\n\nA survey of transformer models and attention mechanisms.\n"
+        )
+        _write_paper(tmp_path, "1706.03762.md", content_exact)
+        _write_paper(tmp_path, "2001.00001.md", content_survey)
+        collection = _make_collection()
+        index_paper(tmp_path / "1706.03762.md", collection)
+        index_paper(tmp_path / "2001.00001.md", collection)
+
+        results = search_papers("Attention Is All You Need", collection, n_results=5)
+
+        assert len(results) >= 1
+        assert results[0]["arxiv_id"] == "1706.03762"
+        # The exact match should score higher than the survey
+        if len(results) >= 2:
+            assert results[0]["score"] > results[1]["score"]
+
+    def test_no_results_for_nonexistent(self, tmp_path: Path):
+        """Search with a strict min_score should exclude semantically unrelated papers."""
+        content = (
+            "---\narxiv_id: '2301.00001'\ntitle: 'Attention Is All You Need'\n"
+            "tags:\n  - transformers\n---\n\n"
+            "## Introduction\n\nTransformer architecture using self-attention.\n"
+        )
+        md_path = _write_paper(tmp_path, "2301.00001.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        # Use strict min_score to ensure completely unrelated queries return nothing
+        results = search_papers(
+            "一篇完全不存在的论文xyz123abc", collection, n_results=5, min_score=0.75
+        )
+
+        assert results == []
+
+    def test_dedup_still_works(self, tmp_path: Path):
+        """Multiple chunks from same paper should be deduplicated."""
+        body_sections = "\n\n".join(
+            f"## Section {i}\n\nDetailed content about language models in section {i}."
+            for i in range(8)
+        )
+        content = (
+            "---\narxiv_id: '2412.00005'\ntitle: 'Large Language Model Study'\n"
+            "tags:\n  - llm\n---\n\n" + body_sections
+        )
+        md_path = _write_paper(tmp_path, "2412.00005.md", content)
+        collection = _make_collection()
+        index_paper(md_path, collection)
+
+        results = search_papers("language models", collection, n_results=20)
+
+        arxiv_ids = [r["arxiv_id"] for r in results]
+        assert len(results) == 1
+        assert arxiv_ids[0] == "2412.00005"

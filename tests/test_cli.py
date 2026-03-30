@@ -289,7 +289,7 @@ class TestSearch:
             result = runner.invoke(app, ["search", "nothing here"])
 
         assert result.exit_code == 0
-        assert "No results" in result.output
+        assert "No matching papers found" in result.output
 
 
 # ---------------------------------------------------------------------------
