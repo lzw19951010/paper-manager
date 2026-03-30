@@ -116,15 +116,22 @@ def test_rate_limiter_enforces_delay():
 # download_pdf
 # ---------------------------------------------------------------------------
 
+def _make_stream_response(content: bytes, status_code: int = 200):
+    """Build a mock context manager for httpx.stream."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.raise_for_status = MagicMock()
+    resp.iter_bytes = MagicMock(return_value=[content])
+    resp.__enter__ = lambda s: resp
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
 def test_download_pdf_saves_file(tmp_path: Path):
     fake_pdf_bytes = b"%PDF-1.4 fake content"
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.content = fake_pdf_bytes
-    resp.raise_for_status = MagicMock()
+    stream_resp = _make_stream_response(fake_pdf_bytes)
 
-    with patch("paper_manager.downloader._rate_limit"), \
-         patch("httpx.get", return_value=resp):
+    with patch("httpx.stream", return_value=stream_resp):
         result = download_pdf("2301.00001", tmp_path / "pdfs")
 
     assert result == tmp_path / "pdfs" / "2301.00001.pdf"
@@ -133,22 +140,16 @@ def test_download_pdf_saves_file(tmp_path: Path):
 
 
 def test_download_pdf_raises_on_404(tmp_path: Path):
-    resp = MagicMock()
-    resp.status_code = 404
-    resp.raise_for_status = MagicMock()
+    stream_resp = _make_stream_response(b"", status_code=404)
 
-    with patch("paper_manager.downloader._rate_limit"), \
-         patch("httpx.get", return_value=resp):
+    with patch("httpx.stream", return_value=stream_resp):
         with pytest.raises(ValueError, match="not found \\(404\\)"):
             download_pdf("2301.00001", tmp_path)
 
 
 def test_download_pdf_raises_on_410(tmp_path: Path):
-    resp = MagicMock()
-    resp.status_code = 410
-    resp.raise_for_status = MagicMock()
+    stream_resp = _make_stream_response(b"", status_code=410)
 
-    with patch("paper_manager.downloader._rate_limit"), \
-         patch("httpx.get", return_value=resp):
+    with patch("httpx.stream", return_value=stream_resp):
         with pytest.raises(ValueError, match="withdrawn \\(410\\)"):
             download_pdf("2301.00001", tmp_path)

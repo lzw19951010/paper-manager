@@ -178,7 +178,10 @@ def fetch_metadata(arxiv_id: str) -> dict:
 
 
 def download_pdf(arxiv_id: str, output_dir: Path) -> Path:
-    """Download a paper PDF from arxiv.
+    """Download a paper PDF from arxiv via streaming.
+
+    Uses arxiv.org/pdf/ (same as browser) with streaming download to handle
+    large PDFs reliably. Verifies the downloaded file starts with %PDF.
 
     Args:
         arxiv_id: A bare arxiv ID such as "2301.00001".
@@ -192,34 +195,51 @@ def download_pdf(arxiv_id: str, output_dir: Path) -> Path:
         httpx.HTTPError: On other unrecoverable HTTP errors.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    pdf_url = f"https://export.arxiv.org/pdf/{arxiv_id}"
+    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
     dest = output_dir / f"{arxiv_id}.pdf"
 
     last_exc: Exception | None = None
     for attempt in range(3):
         if attempt > 0:
             time.sleep(2 ** attempt)
-        _rate_limit()
         try:
-            response = httpx.get(pdf_url, timeout=60.0, follow_redirects=True, headers=_HEADERS)
-            if response.status_code == 404:
-                raise ValueError(f"Paper {arxiv_id} not found (404)")
-            if response.status_code == 410:
-                raise ValueError(f"Paper {arxiv_id} has been withdrawn (410)")
-            if response.status_code >= 500:
-                last_exc = httpx.HTTPStatusError(
-                    f"Server error {response.status_code}",
-                    request=response.request,
-                    response=response,
-                )
+            with httpx.stream(
+                "GET", pdf_url, timeout=120.0, follow_redirects=True, headers=_HEADERS,
+            ) as response:
+                if response.status_code == 404:
+                    raise ValueError(f"Paper {arxiv_id} not found (404)")
+                if response.status_code == 410:
+                    raise ValueError(f"Paper {arxiv_id} has been withdrawn (410)")
+                if response.status_code >= 500:
+                    last_exc = httpx.HTTPStatusError(
+                        f"Server error {response.status_code}",
+                        request=response.request,
+                        response=response,
+                    )
+                    continue
+                response.raise_for_status()
+
+                with open(dest, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=65536):
+                        f.write(chunk)
+
+            # Verify it's a valid PDF
+            with open(dest, "rb") as f:
+                header = f.read(5)
+            if header != b"%PDF-":
+                logger.warning("Downloaded file does not look like a PDF, retrying...")
+                dest.unlink(missing_ok=True)
+                last_exc = RuntimeError("Downloaded file is not a valid PDF")
                 continue
-            response.raise_for_status()
-            dest.write_bytes(response.content)
+
+            size_mb = dest.stat().st_size / (1024 * 1024)
+            logger.info("Downloaded %s (%.1f MB)", dest.name, size_mb)
             return dest
         except ValueError:
             raise
         except httpx.TimeoutException as exc:
             last_exc = exc
+            dest.unlink(missing_ok=True)
             continue
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code >= 500:

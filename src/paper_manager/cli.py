@@ -128,13 +128,17 @@ def add(
             title_display = title_display[:57] + "..."
         typer.echo(f"  Title: {title_display}")
 
-        # Download PDF
-        typer.echo("  Downloading PDF...")
-        try:
-            pdf_path = download_pdf(arxiv_id, config.tmp_path)
-        except Exception as exc:
-            typer.echo(f"  Error downloading PDF: {exc}", err=True)
-            continue
+        # Download PDF (skip if already cached locally)
+        pdf_path = config.tmp_path / f"{arxiv_id}.pdf"
+        if pdf_path.exists() and pdf_path.stat().st_size > 0:
+            typer.echo(f"  PDF cached: {pdf_path.name}")
+        else:
+            typer.echo("  Downloading PDF...")
+            try:
+                pdf_path = download_pdf(arxiv_id, config.tmp_path)
+            except Exception as exc:
+                typer.echo(f"  Error downloading PDF: {exc}", err=True)
+                continue
 
         # Analyze with Claude
         typer.echo(f"  Analyzing with {config.model}...")
@@ -144,7 +148,6 @@ def add(
             analysis = analyze_paper(pdf_path, prompt, config)
         except Exception as exc:
             typer.echo(f"  Error during analysis: {exc}", err=True)
-            _cleanup_pdf(pdf_path)
             continue
 
         # Generate tags
@@ -172,7 +175,6 @@ def add(
             )
         except Exception as exc:
             typer.echo(f"  Error writing note: {exc}", err=True)
-            _cleanup_pdf(pdf_path)
             continue
 
         # Index in ChromaDB
@@ -183,8 +185,6 @@ def add(
         except Exception as exc:
             typer.echo(f"  Warning: indexing failed: {exc}", err=True)
 
-        # Clean up temporary PDF
-        _cleanup_pdf(pdf_path)
 
         try:
             rel_path = note_path.relative_to(root)
