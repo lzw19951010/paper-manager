@@ -21,11 +21,11 @@ def get_collection(chromadb_dir: Path) -> chromadb.Collection:
         chromadb_dir: Directory where ChromaDB stores its data.
 
     Returns:
-        A ChromaDB Collection named "papers_v2".
+        A ChromaDB Collection named "papers".
     """
     client = chromadb.PersistentClient(path=str(chromadb_dir))
     ef = _get_embedding_function()
-    return client.get_or_create_collection("papers_v2", embedding_function=ef)
+    return client.get_or_create_collection("papers", embedding_function=ef)
 
 
 def parse_frontmatter(md_content: str) -> tuple[dict, str]:
