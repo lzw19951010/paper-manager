@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -18,6 +20,98 @@ def _make_config():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+class TestExtractJson:
+    """Tests for the _extract_json helper.
+
+    Root cause of the original bug (Scaling Laws paper, 13639 tokens):
+    The "last resort" fix used `re.sub(r'(?<!\\)\n', r'\\n', candidate)` which
+    replaced ALL newlines — including structural JSON newlines between keys.
+    This turned valid `{\\n  "key":` into `{` + backslash + `n  "key":`, where
+    backslash at position 1 is not a valid JSON character, causing:
+      "Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+    The fix: _fix_json_string_escapes only escapes newlines inside string values.
+    """
+
+    def test_plain_json(self):
+        from paper_manager.analyzer import _extract_json
+        data = {"venue": "NeurIPS 2023", "keywords": ["a", "b"]}
+        assert _extract_json(json.dumps(data)) == data
+
+    def test_json_in_code_fence(self):
+        from paper_manager.analyzer import _extract_json
+        data = {"venue": "ICML", "tldr": "short"}
+        text = f"```json\n{json.dumps(data)}\n```"
+        assert _extract_json(text) == data
+
+    def test_json_in_code_fence_no_lang(self):
+        from paper_manager.analyzer import _extract_json
+        data = {"venue": "ICLR"}
+        text = f"```\n{json.dumps(data)}\n```"
+        assert _extract_json(text) == data
+
+    def test_json_with_prose_before(self):
+        """JSON preceded by prose — brace-matching must find the real object."""
+        from paper_manager.analyzer import _extract_json
+        data = {"category": "llm/pretraining"}
+        text = f"Here is my analysis:\n{json.dumps(data)}"
+        assert _extract_json(text) == data
+
+    def test_multiline_json_structural_newlines(self):
+        """Structural newlines in pretty-printed JSON must be preserved.
+
+        This is the exact scenario that triggered the bug: the first json.loads
+        attempt succeeds on well-formed multi-line JSON.  If the old re.sub were
+        applied here it would corrupt the braces line and raise the
+        "char 1" error.
+        """
+        from paper_manager.analyzer import _extract_json
+        data = {
+            "venue": "arXiv",
+            "keywords": ["scaling", "language models"],
+            "tldr": "Scaling laws govern language model performance.",
+        }
+        pretty = json.dumps(data, indent=2, ensure_ascii=False)
+        assert _extract_json(pretty) == data
+
+    def test_unescaped_newlines_in_string_values(self):
+        """Newlines inside a JSON string value (e.g. multi-line markdown) must be
+        fixed without corrupting structural newlines.
+
+        This is the exact failure mode that caused the Scaling Laws paper error:
+        Claude's executive_summary / methodology fields contained raw newlines
+        inside string values, making json.loads fail.  The old code then applied
+        re.sub over ALL newlines, turning structural `{\\n` into backslash+n
+        which caused the "char 1" JSONDecodeError.
+        """
+        from paper_manager.analyzer import _extract_json
+
+        # Manually build a JSON-like string with an unescaped newline inside a value
+        broken = '{\n  "venue": "arXiv",\n  "executive_summary": "Line one.\nLine two."\n}'
+        result = _extract_json(broken)
+        assert result["venue"] == "arXiv"
+        assert "Line one." in result["executive_summary"]
+        assert "Line two." in result["executive_summary"]
+
+    def test_no_json_raises(self):
+        from paper_manager.analyzer import _extract_json
+        with pytest.raises(ValueError, match="No JSON object found"):
+            _extract_json("no braces here at all")
+
+    def test_fix_json_string_escapes_only_inside_strings(self):
+        """_fix_json_string_escapes must leave structural newlines untouched."""
+        from paper_manager.analyzer import _fix_json_string_escapes
+
+        # Structural newline between keys — must survive unchanged
+        src = '{\n  "k": "v"\n}'
+        result = _fix_json_string_escapes(src)
+        assert json.loads(result) == {"k": "v"}
+
+        # Newline inside a value — must be escaped
+        src2 = '{"k": "line1\nline2"}'
+        result2 = _fix_json_string_escapes(src2)
+        assert json.loads(result2) == {"k": "line1\nline2"}
+
 
 class TestGetPageCount:
     def test_get_page_count(self, tmp_path: Path):

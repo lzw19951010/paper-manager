@@ -181,15 +181,53 @@ def _call_claude(prompt: str, show_progress: bool = True) -> str:
     return result_text.strip()
 
 
+def _fix_json_string_escapes(s: str) -> str:
+    """Escape control characters that appear inside JSON string values only.
+
+    Walks the JSON character-by-character tracking whether we're inside a
+    string, so structural whitespace (newlines between keys) is preserved
+    while unescaped newlines/tabs *within* values are fixed.
+    """
+    result = []
+    in_string = False
+    i = 0
+    while i < len(s):
+        c = s[i]
+        if c == "\\" and in_string:
+            # Pass through existing escape sequence verbatim
+            result.append(c)
+            i += 1
+            if i < len(s):
+                result.append(s[i])
+                i += 1
+            continue
+        if c == '"':
+            in_string = not in_string
+        if in_string and c == "\n":
+            result.append("\\n")
+        elif in_string and c == "\r":
+            result.append("\\r")
+        elif in_string and c == "\t":
+            result.append("\\t")
+        else:
+            result.append(c)
+        i += 1
+    return "".join(result)
+
+
 def _extract_json(text: str) -> dict:
     """Extract a JSON object from Claude's response text, with robust fallback."""
-    # Try to find JSON in a code block first
-    match = re.search(r"```(?:json)?\s*\n(\{.*\})\s*\n```", text, re.DOTALL)
+    # Try to find JSON in a code block first (handles optional language tag and
+    # varying amounts of surrounding whitespace)
+    match = re.search(r"```(?:json)?\s*\n?(\{.*?\})\s*\n?```", text, re.DOTALL)
     if match:
         try:
             return json.loads(match.group(1))
         except json.JSONDecodeError:
-            pass
+            try:
+                return json.loads(_fix_json_string_escapes(match.group(1)))
+            except json.JSONDecodeError:
+                pass
 
     # Try to find the outermost JSON object by matching braces
     start = text.find("{")
@@ -213,9 +251,8 @@ def _extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # Last resort: try to fix common JSON issues (unescaped newlines in strings)
-    fixed = candidate
-    fixed = re.sub(r'(?<!\\)\n', r'\\n', fixed)
+    # Last resort: fix unescaped control chars inside string values only
+    fixed = _fix_json_string_escapes(candidate)
     try:
         return json.loads(fixed)
     except json.JSONDecodeError as exc:
