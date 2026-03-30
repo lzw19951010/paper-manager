@@ -192,17 +192,8 @@ def write_paper_note(
     full_content = f"---\n{yaml_content}---\n\n{body}"
 
     if existing is not None and force:
-        update_frontmatter(existing, frontmatter)
-        # Rewrite the body section too
-        existing_content = existing.read_text(encoding="utf-8")
-        # Find end of frontmatter block
-        fm_end = existing_content.find("---", 3)
-        if fm_end != -1:
-            new_content = existing_content[: fm_end + 3] + "\n\n" + body
-        else:
-            new_content = full_content
-        existing.write_text(new_content, encoding="utf-8")
-        return existing
+        # Remove old file (may be in a different directory/category)
+        existing.unlink(missing_ok=True)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(full_content, encoding="utf-8")
