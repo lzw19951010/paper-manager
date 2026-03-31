@@ -50,17 +50,23 @@ def _ensure_config(config_path: Path) -> None:
 
 def _ensure_templates(templates_dir: Path) -> None:
     """Create the templates directory with default templates if missing."""
-    from deepaper.defaults import DEFAULT_TEMPLATE, DEFAULT_CATEGORIES
+    from deepaper.defaults import (
+        DEFAULT_TEMPLATE, DEFAULT_CATEGORIES,
+        DEFAULT_CLASSIFY, DEFAULT_TAGS,
+    )
 
     templates_dir.mkdir(parents=True, exist_ok=True)
 
-    default_md = templates_dir / "default.md"
-    if not default_md.exists():
-        default_md.write_text(DEFAULT_TEMPLATE, encoding="utf-8")
-
-    categories_md = templates_dir / "categories.md"
-    if not categories_md.exists():
-        categories_md.write_text(DEFAULT_CATEGORIES, encoding="utf-8")
+    _defaults = {
+        "default.md": DEFAULT_TEMPLATE,
+        "categories.md": DEFAULT_CATEGORIES,
+        "classify.md": DEFAULT_CLASSIFY,
+        "tags.md": DEFAULT_TAGS,
+    }
+    for filename, content in _defaults.items():
+        path = templates_dir / filename
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
 
 
 def load_config(root_dir: Path | None = None) -> Config:

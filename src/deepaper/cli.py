@@ -1,8 +1,12 @@
-"""Command-line interface for deepaper."""
+"""Command-line interface for deepaper.
+
+Lightweight paper knowledge base for Claude Code.
+Analysis is done via /deepaper slash command in Claude Code.
+CLI provides I/O utilities: download, save, cite, sync.
+"""
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -11,9 +15,47 @@ import typer
 
 app = typer.Typer(
     name="deepaper",
-    help="Deep paper analysis: AI-powered arxiv reading notes with Claude Code CLI.",
+    help="Paper knowledge base for Claude Code. Use /deepaper in Claude Code to analyze papers.",
     add_completion=False,
 )
+
+
+def _auto_install_slash_command() -> None:
+    """Auto-install slash command to ~/.claude/commands/ if not present."""
+    cmd_path = Path.home() / ".claude" / "commands" / "deepaper.md"
+    if not cmd_path.exists():
+        cmd_path.parent.mkdir(parents=True, exist_ok=True)
+        from deepaper.defaults import get_default_slash_command
+        cmd_path.write_text(get_default_slash_command(), encoding="utf-8")
+
+
+# Auto-install on first import (i.e., first `deepaper` command)
+try:
+    _auto_install_slash_command()
+except Exception:
+    pass  # silently skip if home dir is read-only etc.
+
+
+# ---------------------------------------------------------------------------
+# install
+# ---------------------------------------------------------------------------
+
+@app.command()
+def install() -> None:
+    """Install /deepaper slash command to Claude Code (global).
+
+    Copies the slash command to ~/.claude/commands/ so /deepaper works
+    in any project.
+    """
+    home_claude = Path.home() / ".claude" / "commands"
+    home_claude.mkdir(parents=True, exist_ok=True)
+
+    cmd_dest = home_claude / "deepaper.md"
+    from deepaper.defaults import get_default_slash_command
+    cmd_dest.write_text(get_default_slash_command(), encoding="utf-8")
+
+    typer.echo(f"Installed /deepaper to {cmd_dest}")
+    typer.echo("Now use /deepaper <arxiv-url> in Claude Code from any directory.")
 
 
 # ---------------------------------------------------------------------------
@@ -24,228 +66,150 @@ app = typer.Typer(
 def init(
     git_remote: str = typer.Option("", "--git-remote", help="Git remote URL for syncing."),
 ) -> None:
-    """Initialize a deepaper project in the current directory.
-
-    Works from any empty directory — no existing repo required.
-    """
-    from deepaper.config import _ensure_templates
-    from deepaper.defaults import DEFAULT_CONFIG_YAML
-
+    """Initialize a deepaper project in the current directory."""
     root = Path.cwd()
 
-    # 1. Create config.yaml with inline defaults (idempotent)
+    # config.yaml
     config_path = root / "config.yaml"
-
     if config_path.exists():
         typer.echo("config.yaml already exists — skipping.")
     else:
+        from deepaper.defaults import DEFAULT_CONFIG_YAML
         config_path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
-        typer.echo("Created config.yaml with defaults.")
+        typer.echo("Created config.yaml.")
 
-    # 2. Create templates/ directory with bundled templates (idempotent)
-    templates_dir = root / "templates"
-    _ensure_templates(templates_dir)
-    typer.echo("templates/ directory ready.")
-
-    # 3. Create papers/ directory
-    papers_dir = root / "papers"
-    papers_dir.mkdir(exist_ok=True)
+    # papers/
+    (root / "papers").mkdir(exist_ok=True)
     typer.echo("papers/ directory ready.")
 
-    # 4. Create .obsidian/app.json to exclude non-vault dirs (idempotent)
+    # .obsidian/app.json
     obsidian_dir = root / ".obsidian"
     obsidian_dir.mkdir(exist_ok=True)
-    app_json_path = obsidian_dir / "app.json"
-
-    if not app_json_path.exists():
-        obsidian_config = {
-            "userIgnoreFilters": ["src/", "tests/", "tmp/", ".chromadb/"]
-        }
-        app_json_path.write_text(
-            json.dumps(obsidian_config, indent=2), encoding="utf-8"
+    app_json = obsidian_dir / "app.json"
+    if not app_json.exists():
+        app_json.write_text(
+            json.dumps({"userIgnoreFilters": ["tmp/", ".chromadb/"]}, indent=2),
+            encoding="utf-8",
         )
-        typer.echo("Created .obsidian/app.json with exclusion filters.")
+
+    # .claude/commands/deepaper.md (project-level)
+    claude_dir = root / ".claude" / "commands"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    cmd_path = claude_dir / "deepaper.md"
+    if not cmd_path.exists():
+        from deepaper.defaults import get_default_slash_command
+        cmd_path.write_text(get_default_slash_command(), encoding="utf-8")
+        typer.echo("Created .claude/commands/deepaper.md")
     else:
-        typer.echo(".obsidian/app.json already exists — skipping.")
+        typer.echo(".claude/commands/deepaper.md already exists — skipping.")
 
-    # 5. Auto-detect Claude Code CLI
-    try:
-        result = subprocess.run(
-            ["claude", "--version"], capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            typer.echo("Claude Code CLI: detected")
-        else:
-            typer.echo(
-                "Warning: Claude Code CLI not responding. Install from https://claude.ai/code",
-                err=True,
-            )
-    except FileNotFoundError:
-        typer.echo(
-            "Warning: Claude Code CLI not found. Install from https://claude.ai/code",
-            err=True,
-        )
-
-    # 6. Init git repo
+    # Git
     if git_remote:
         from deepaper.sync import init_repo
         init_repo(root, git_remote)
-        typer.echo(f"Git repo initialized with remote: {git_remote}")
+        typer.echo(f"Git initialized with remote: {git_remote}")
     elif not (root / ".git").exists():
-        typer.echo(
-            "Tip: run `deepaper init --git-remote <url>` to enable git sync."
-        )
+        typer.echo("Tip: deepaper init --git-remote <url> to enable sync.")
 
-    typer.echo("\nDone. Run `deepaper add <arxiv-url>` to add your first paper.")
+    typer.echo("\nDone. Use /deepaper <arxiv-url> in Claude Code.")
 
 
 # ---------------------------------------------------------------------------
-# add
+# download
 # ---------------------------------------------------------------------------
 
 @app.command()
-def add(
-    urls: list[str] = typer.Argument(..., help="One or more arxiv URLs or IDs to process."),
-    force: bool = typer.Option(False, "--force", "-f", help="Re-process existing papers."),
+def download(
+    url: str = typer.Argument(..., help="arxiv URL or ID to download."),
 ) -> None:
-    """Download and analyze one or more arxiv papers."""
-    from deepaper.config import load_config
+    """Download a paper PDF and output metadata + file path as JSON.
+
+    Claude Code reads the PDF directly via its native Read tool.
+    """
     from deepaper.downloader import parse_arxiv_id, fetch_metadata, download_pdf
-    from deepaper.templates import load_template, render_prompt
-    from deepaper.analyzer import analyze_paper, generate_tags, classify_paper
-    from deepaper.writer import find_existing, write_paper_note
-    from deepaper.search import get_collection, index_paper
 
     root = Path.cwd()
-    config = load_config(root)
+    tmp_dir = root / "tmp"
+    tmp_dir.mkdir(exist_ok=True)
 
-    for url in urls:
-        typer.echo(f"\nProcessing: {url}")
-
-        # Parse arxiv ID
-        try:
-            arxiv_id = parse_arxiv_id(url)
-        except ValueError as exc:
-            typer.echo(f"  Error: {exc}", err=True)
-            continue
-
-        typer.echo(f"  arxiv ID: {arxiv_id}")
-
-        # Skip if already exists (unless --force)
-        existing = find_existing(arxiv_id, config.papers_path)
-        if existing is not None and not force:
-            typer.echo(f"  Skipping — note already exists: {existing.name}")
-            typer.echo("  Use --force to re-process.")
-            continue
-
-        # Fetch metadata
-        typer.echo("  Fetching metadata...")
-        try:
-            metadata = fetch_metadata(arxiv_id)
-        except Exception as exc:
-            typer.echo(f"  Error fetching metadata: {exc}", err=True)
-            continue
-
-        title_display = metadata["title"]
-        if len(title_display) > 60:
-            title_display = title_display[:57] + "..."
-        typer.echo(f"  Title: {title_display}")
-
-        # Download PDF (skip if already cached locally)
-        pdf_path = config.tmp_path / f"{arxiv_id}.pdf"
-        if pdf_path.exists() and pdf_path.stat().st_size > 0:
-            typer.echo(f"  PDF cached: {pdf_path.name}")
-        else:
-            typer.echo("  Downloading PDF...")
-            try:
-                pdf_path = download_pdf(arxiv_id, config.tmp_path)
-            except Exception as exc:
-                typer.echo(f"  Error downloading PDF: {exc}", err=True)
-                continue
-
-        # Analyze with Claude
-        typer.echo(f"  Analyzing with {config.model}...")
-        try:
-            template = load_template(config.template, config.templates_path)
-            prompt = render_prompt(template, metadata)
-            analysis = analyze_paper(pdf_path, prompt, config)
-        except Exception as exc:
-            typer.echo(f"  Error during analysis: {exc}", err=True)
-            continue
-
-        # Generate tags
-        typer.echo("  Generating tags...")
-        try:
-            tags = generate_tags(analysis, config)
-        except Exception as exc:
-            typer.echo(f"  Warning: tag generation failed: {exc}", err=True)
-            tags = []
-
-        # Classify paper into category
-        typer.echo("  Classifying paper...")
-        try:
-            category = classify_paper(analysis, config)
-        except Exception as exc:
-            typer.echo(f"  Warning: classification failed: {exc}", err=True)
-            category = "misc"
-        typer.echo(f"  Category: {category}")
-
-        # Fetch citations from Semantic Scholar
-        typer.echo("  Fetching citations from Semantic Scholar...")
-        try:
-            from deepaper.citations import fetch_citing_papers, enrich_mechanism_transfer
-            citation_data = fetch_citing_papers(arxiv_id)
-            total_cites = citation_data.get("total_citations", 0)
-            influential = sum(
-                1 for p in citation_data.get("citing_papers", []) if p.get("is_influential")
-            )
-            typer.echo(f"  Citations: {total_cites:,} total, {influential} influential")
-
-            # Enrich mechanism_transfer section with real citation data
-            if citation_data.get("citing_papers"):
-                mt = analysis.get("mechanism_transfer") or ""
-                analysis["mechanism_transfer"] = enrich_mechanism_transfer(mt, citation_data)
-
-            # Persist citation metadata to frontmatter
-            analysis["citation_count"] = total_cites
-            analysis["citation_date"] = citation_data.get("fetch_date", "")
-        except Exception as exc:
-            typer.echo(f"  Warning: citation fetch failed: {exc}", err=True)
-
-        # Write markdown note
-        typer.echo("  Writing note...")
-        try:
-            note_path = write_paper_note(
-                analysis, metadata, tags, config.papers_path, force=force, category=category
-            )
-        except Exception as exc:
-            typer.echo(f"  Error writing note: {exc}", err=True)
-            continue
-
-        # Index in ChromaDB
-        typer.echo("  Indexing in search database...")
-        try:
-            collection = get_collection(config.chromadb_path)
-            index_paper(note_path, collection)
-        except Exception as exc:
-            typer.echo(f"  Warning: indexing failed: {exc}", err=True)
-
-
-        try:
-            rel_path = note_path.relative_to(root)
-        except ValueError:
-            rel_path = note_path
-        typer.echo(f"  Done: {rel_path}")
-
-    typer.echo("\nAll papers processed.")
-
-
-def _cleanup_pdf(pdf_path: Path) -> None:
-    """Remove a temporary PDF file, silently ignoring errors."""
     try:
-        pdf_path.unlink(missing_ok=True)
-    except OSError:
-        pass
+        arxiv_id = parse_arxiv_id(url)
+    except ValueError as exc:
+        typer.echo(json.dumps({"error": str(exc)}))
+        raise typer.Exit(1)
+
+    metadata = fetch_metadata(arxiv_id)
+
+    pdf_path = tmp_dir / f"{arxiv_id}.pdf"
+    if not (pdf_path.exists() and pdf_path.stat().st_size > 0):
+        pdf_path = download_pdf(arxiv_id, tmp_dir)
+
+    size_mb = pdf_path.stat().st_size / (1024 * 1024)
+
+    typer.echo(json.dumps({
+        "arxiv_id": arxiv_id,
+        "title": metadata["title"],
+        "authors": metadata["authors"],
+        "date": metadata["date"],
+        "abstract": metadata.get("abstract", ""),
+        "categories": metadata.get("categories", []),
+        "url": metadata["url"],
+        "pdf_path": str(pdf_path.resolve()),
+        "size_mb": round(size_mb, 1),
+    }, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# save
+# ---------------------------------------------------------------------------
+
+@app.command()
+def save(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID of the paper."),
+    category: str = typer.Option("misc", "--category", "-c", help="Category path like llm/pretraining."),
+    input_file: Optional[str] = typer.Option(None, "--input", "-i", help="Path to markdown file. Reads stdin if omitted."),
+    tags: Optional[str] = typer.Option(None, "--tags", "-t", help="Comma-separated tags."),
+) -> None:
+    """Save an analyzed paper note to the knowledge base.
+
+    Accepts markdown with YAML frontmatter. Merges arxiv metadata,
+    writes to the category directory.
+    """
+    import sys
+    from deepaper.downloader import parse_arxiv_id, fetch_metadata
+    from deepaper.analyzer import parse_analysis_response
+    from deepaper.writer import write_paper_note
+
+    root = Path.cwd()
+    papers_dir = root / "papers"
+    papers_dir.mkdir(exist_ok=True)
+
+    content = Path(input_file).read_text(encoding="utf-8") if input_file else sys.stdin.read()
+    if not content.strip():
+        typer.echo("Error: empty input", err=True)
+        raise typer.Exit(1)
+
+    analysis_fm, analysis_body = parse_analysis_response(content)
+    real_id = parse_arxiv_id(arxiv_id)
+    metadata = fetch_metadata(real_id)
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else analysis_fm.get("keywords", [])
+
+    note_path = write_paper_note(
+        analysis_fm, analysis_body, metadata, tag_list,
+        papers_dir, force=True, category=category,
+    )
+
+    try:
+        rel_path = str(note_path.relative_to(root))
+    except ValueError:
+        rel_path = str(note_path)
+
+    typer.echo(json.dumps({
+        "saved": rel_path,
+        "category": category,
+        "tags": tag_list,
+    }, ensure_ascii=False))
 
 
 # ---------------------------------------------------------------------------
@@ -254,269 +218,18 @@ def _cleanup_pdf(pdf_path: Path) -> None:
 
 @app.command()
 def sync(
-    message: Optional[str] = typer.Option(
-        None, "--message", "-m", help="Custom commit message."
-    ),
+    message: Optional[str] = typer.Option(None, "--message", "-m", help="Custom commit message."),
 ) -> None:
     """Sync papers to git: pull --rebase, commit, and push."""
-    import git as gitlib
-
-    from deepaper.config import load_config
-    from deepaper.sync import sync_to_git, get_new_files_from_pull
-    from deepaper.search import get_collection, index_paper
-
     root = Path.cwd()
-
     if not (root / ".git").exists():
-        typer.echo(
-            "No git repo found. Run: deepaper init --git-remote <url>",
-            err=True,
-        )
+        typer.echo("No git repo. Run: deepaper init --git-remote <url>", err=True)
         raise typer.Exit(1)
 
-    config = load_config(root)
-
-    # Capture HEAD SHA before pull so we can detect newly pulled files
-    before_sha: Optional[str] = None
-    try:
-        repo = gitlib.Repo(root)
-        try:
-            before_sha = repo.head.commit.hexsha
-        except (ValueError, TypeError):
-            before_sha = None
-    except gitlib.InvalidGitRepositoryError:
-        typer.echo("Invalid git repository.", err=True)
-        raise typer.Exit(1)
-
+    from deepaper.sync import sync_to_git
     typer.echo("Syncing to git...")
-    sync_to_git(root, message=message, papers_dir=config.papers_dir)
+    sync_to_git(root, message=message, papers_dir="papers")
     typer.echo("Sync complete.")
-
-    # Reindex any new .md files that arrived via pull
-    if before_sha:
-        try:
-            new_files = get_new_files_from_pull(repo, before_sha)
-            if new_files:
-                typer.echo(f"Indexing {len(new_files)} new paper(s) from pull...")
-                collection = get_collection(config.chromadb_path)
-                for md_path in new_files:
-                    try:
-                        index_paper(md_path, collection)
-                        typer.echo(f"  Indexed: {md_path.name}")
-                    except Exception as exc:
-                        typer.echo(
-                            f"  Warning: failed to index {md_path.name}: {exc}",
-                            err=True,
-                        )
-        except Exception as exc:
-            typer.echo(f"Warning: could not check for new files: {exc}", err=True)
-
-
-# ---------------------------------------------------------------------------
-# search
-# ---------------------------------------------------------------------------
-
-@app.command()
-def search(
-    query: str = typer.Argument(..., help="Natural language search query."),
-    n: int = typer.Option(5, "--n", "-n", help="Number of results to return."),
-) -> None:
-    """Semantic search over your paper collection."""
-    from deepaper.config import load_config
-    from deepaper.search import get_collection, search_papers
-
-    root = Path.cwd()
-    config = load_config(root)
-
-    if not config.chromadb_path.exists():
-        typer.echo(
-            "No search index found. Run: deepaper reindex",
-            err=True,
-        )
-        raise typer.Exit(1)
-
-    collection = get_collection(config.chromadb_path)
-    results = search_papers(query, collection, n_results=n)
-
-    if not results:
-        typer.echo("No matching papers found. The paper may not be indexed yet.")
-        return
-
-    typer.echo(f"\nSearch results for: {query!r}\n")
-    typer.echo(f"{'#':<3}  {'Score':<7}  {'Title':<50}  Tags")
-    typer.echo("-" * 90)
-
-    for i, result in enumerate(results, 1):
-        title = result["title"]
-        if len(title) > 50:
-            title = title[:48] + ".."
-        score_str = f"{result['score']:.3f}"
-        tags = (result.get("tags") or "")[:30]
-        typer.echo(f"{i:<3}  {score_str:<7}  {title:<50}  {tags}")
-
-        snippet = result.get("matched_section", "")
-        if snippet:
-            snippet_display = snippet[:100].replace("\n", " ")
-            typer.echo(f"     → {snippet_display}")
-
-        typer.echo(f"     arxiv: {result['arxiv_id']}")
-
-    typer.echo()
-
-
-# ---------------------------------------------------------------------------
-# tag
-# ---------------------------------------------------------------------------
-
-@app.command()
-def tag(
-    limit: Optional[int] = typer.Option(
-        None, "--limit", "-l", help="Maximum number of papers to re-tag."
-    ),
-    since: Optional[str] = typer.Option(
-        None, "--since", "-s", help="Only re-tag papers on or after this date (YYYY-MM-DD)."
-    ),
-) -> None:
-    """Re-generate tags for papers using Claude."""
-    from deepaper.config import load_config
-    from deepaper.analyzer import generate_tags
-    from deepaper.writer import update_frontmatter
-    from deepaper.search import parse_frontmatter
-
-    root = Path.cwd()
-    config = load_config(root)
-
-    if not config.papers_path.exists():
-        typer.echo("No papers directory found.", err=True)
-        raise typer.Exit(1)
-
-    md_files = sorted(config.papers_path.rglob("*.md"))
-
-    # Filter by --since
-    if since:
-        filtered: list[Path] = []
-        for md in md_files:
-            try:
-                content = md.read_text(encoding="utf-8")
-                fm, _ = parse_frontmatter(content)
-                date_val = fm.get("date", "")
-                if date_val and str(date_val) >= since:
-                    filtered.append(md)
-            except OSError:
-                continue
-        md_files = filtered
-
-    # Apply --limit
-    if limit is not None:
-        md_files = md_files[:limit]
-
-    if not md_files:
-        typer.echo("No papers to re-tag.")
-        return
-
-    typer.echo(f"Re-tagging {len(md_files)} paper(s)...")
-
-    for md_path in md_files:
-        try:
-            content = md_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            typer.echo(f"  Warning: cannot read {md_path.name}: {exc}", err=True)
-            continue
-
-        fm, body = parse_frontmatter(content)
-        title_display = str(fm.get("title", md_path.stem))
-        if len(title_display) > 50:
-            title_display = title_display[:47] + "..."
-        typer.echo(f"  Tagging: {title_display}")
-
-        # Build analysis dict for tag generation from frontmatter + body sections
-        analysis: dict = {
-            "research_question": "",
-            "method": "",
-            "keywords": fm.get("keywords", []),
-        }
-
-        # Extract from new-format sections
-        es_match = re.search(r"## 核心速览.*?\n(.+?)(?=\n---|\n## |\Z)", body, re.DOTALL)
-        if es_match:
-            analysis["research_question"] = es_match.group(1).strip()
-        method_match = re.search(r"## 方法详解.*?\n(.+?)(?=\n---|\n## |\Z)", body, re.DOTALL)
-        if method_match:
-            analysis["method"] = method_match.group(1).strip()[:500]
-
-        try:
-            new_tags = generate_tags(analysis, config)
-            fm["tags"] = new_tags
-            update_frontmatter(md_path, fm)
-            typer.echo(f"    Tags: {', '.join(new_tags)}")
-        except Exception as exc:
-            typer.echo(f"    Warning: failed to tag {md_path.name}: {exc}", err=True)
-
-    typer.echo("Done.")
-
-
-# ---------------------------------------------------------------------------
-# reindex
-# ---------------------------------------------------------------------------
-
-@app.command()
-def reindex() -> None:
-    """Rebuild the semantic search index from all paper notes."""
-    from deepaper.config import load_config
-    from deepaper.search import get_collection, reindex_all
-
-    root = Path.cwd()
-    config = load_config(root)
-
-    if not config.papers_path.exists():
-        typer.echo("No papers directory found.", err=True)
-        raise typer.Exit(1)
-
-    typer.echo("Rebuilding search index...")
-    collection = get_collection(config.chromadb_path)
-    count = reindex_all(config.papers_path, collection)
-    typer.echo(f"Indexed {count} paper(s).")
-
-
-# ---------------------------------------------------------------------------
-# config
-# ---------------------------------------------------------------------------
-
-@app.command(name="config")
-def config_cmd() -> None:
-    """Show current configuration and validate the API key."""
-    from deepaper.config import load_config
-
-    root = Path.cwd()
-    config = load_config(root)
-
-    typer.echo("deepaper configuration\n")
-    typer.echo(f"  root_dir:      {config.root_dir}")
-    typer.echo(f"  model:         {config.model}")
-    typer.echo(f"  tag_model:     {config.tag_model}")
-    typer.echo(f"  papers_dir:    {config.papers_dir}")
-    typer.echo(f"  template:      {config.template}")
-    typer.echo(f"  chromadb_dir:  {config.chromadb_dir}")
-    typer.echo(f"  git_remote:    {config.git_remote or '(not set)'}")
-
-    typer.echo(f"  backend:       Claude Code CLI (Max subscription)")
-
-    # Validate Claude Code CLI is available
-    typer.echo("\nValidating Claude Code CLI...")
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["claude", "-p", "respond with exactly: OK", "--output-format", "text"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0 and "OK" in result.stdout:
-            typer.echo("  Claude Code CLI: available")
-        else:
-            typer.echo("  Claude Code CLI: error — check your installation", err=True)
-    except FileNotFoundError:
-        typer.echo("  Claude Code CLI: not found — install Claude Code first", err=True)
-    except Exception as exc:
-        typer.echo(f"  Claude Code CLI: could not validate — {exc}", err=True)
 
 
 # ---------------------------------------------------------------------------
@@ -525,14 +238,13 @@ def config_cmd() -> None:
 
 @app.command()
 def cite(
-    arxiv_id_or_url: str = typer.Argument(..., help="arxiv URL or ID to look up citations for."),
-    update: bool = typer.Option(False, "--update", "-u", help="Update an existing paper note's Descendants section."),
+    arxiv_id_or_url: str = typer.Argument(..., help="arxiv URL or ID."),
+    update: bool = typer.Option(False, "--update", "-u", help="Update existing note."),
 ) -> None:
-    """Look up citing papers from Semantic Scholar."""
+    """Look up citing papers and optionally update an existing note."""
     from deepaper.downloader import parse_arxiv_id
     from deepaper.citations import fetch_citing_papers, format_descendants_section, enrich_mechanism_transfer
 
-    # Parse arxiv ID
     try:
         arxiv_id = parse_arxiv_id(arxiv_id_or_url)
     except ValueError as exc:
@@ -541,49 +253,44 @@ def cite(
 
     typer.echo(f"Fetching citations for: {arxiv_id}")
     citation_data = fetch_citing_papers(arxiv_id)
-
     total_cites = citation_data.get("total_citations", 0)
-    citing_papers = citation_data.get("citing_papers", [])
-    influential = sum(1 for p in citing_papers if p.get("is_influential"))
-    typer.echo(f"Citations: {total_cites:,} total, {influential} influential")
+    typer.echo(f"Citations: {total_cites:,} total")
 
     if update:
-        from deepaper.config import load_config
         from deepaper.writer import find_existing, update_frontmatter
-        from deepaper.search import parse_frontmatter
+        import re as _re
+        import yaml
 
         root = Path.cwd()
-        config = load_config(root)
+        papers_dir = root / "papers"
 
-        existing = find_existing(arxiv_id, config.papers_path)
+        existing = find_existing(arxiv_id, papers_dir)
         if existing is None:
-            typer.echo(f"No existing note found for arxiv ID: {arxiv_id}", err=True)
+            typer.echo(f"No note found for {arxiv_id}", err=True)
             raise typer.Exit(1)
 
         content = existing.read_text(encoding="utf-8")
-        fm, body = parse_frontmatter(content)
+        # Parse frontmatter
+        fm_match = _re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)", content, _re.DOTALL)
+        if fm_match:
+            fm = yaml.safe_load(fm_match.group(1)) or {}
+            body = fm_match.group(2)
+        else:
+            fm, body = {}, content
 
-        # Update descendants section in the mechanism_transfer part of the body
-        import re as _re
-        mt_pattern = _re.compile(
-            r"(## 机制迁移分析[^\n]*\n\n)(.*?)(?=\n---\n|\n## |\Z)",
-            _re.DOTALL,
-        )
+        # Inject citation data
+        mt_pattern = _re.compile(r"(## 机制迁移分析[^\n]*\n\n)(.*?)(?=\n---\n|\n## |\Z)", _re.DOTALL)
         m = mt_pattern.search(body)
         if m:
-            updated_mt = enrich_mechanism_transfer(m.group(2), citation_data)
-            body = body[: m.start(2)] + updated_mt + body[m.end(2):]
+            body = body[:m.start(2)] + enrich_mechanism_transfer(m.group(2), citation_data) + body[m.end(2):]
         else:
-            # Append formatted section at end of body
             body = body.rstrip("\n") + "\n\n" + format_descendants_section(citation_data)
 
-        # Update frontmatter citation fields
         fm["citation_count"] = total_cites
         fm["citation_date"] = citation_data.get("fetch_date", "")
 
-        import yaml
         new_yaml = yaml.dump(fm, default_flow_style=False, allow_unicode=True)
-        existing.write_text(f"---\n{new_yaml}---{body}", encoding="utf-8")
+        existing.write_text(f"---\n{new_yaml}---\n{body}", encoding="utf-8")
         typer.echo(f"Updated: {existing}")
     else:
         typer.echo("")

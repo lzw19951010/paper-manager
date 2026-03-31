@@ -70,6 +70,18 @@ def _empty_result(source: str = "openalex") -> dict:
     }
 
 
+def _reconstruct_abstract(inverted_index: dict | None) -> str:
+    """Reconstruct plain text abstract from OpenAlex's abstract_inverted_index."""
+    if not inverted_index or not isinstance(inverted_index, dict):
+        return ""
+    word_positions: list[tuple[int, str]] = []
+    for word, positions in inverted_index.items():
+        for pos in positions:
+            word_positions.append((pos, word))
+    word_positions.sort()
+    return " ".join(w for _, w in word_positions)
+
+
 def _fetch_openalex(arxiv_id: str, limit: int = 50) -> dict:
     """Fetch citing papers from OpenAlex API (no API key required).
 
@@ -119,7 +131,7 @@ def _fetch_openalex(arxiv_id: str, limit: int = 50) -> dict:
             "filter": f"cites:{openalex_short}",
             "sort": "cited_by_count:desc",
             "per_page": min(limit, 200),
-            "select": "id,display_name,authorships,publication_year,cited_by_count,ids,primary_location",
+            "select": "id,display_name,authorships,publication_year,cited_by_count,ids,primary_location,abstract_inverted_index",
             "mailto": _OA_MAILTO,
         }
         resp = _get_with_retry(
@@ -150,7 +162,6 @@ def _fetch_openalex(arxiv_id: str, limit: int = 50) -> dict:
         # Extract arxiv ID from ids dict if present
         ids = work.get("ids") or {}
         arxiv_url = ids.get("arxiv") or ""
-        # arxiv URLs look like "https://arxiv.org/abs/2301.00001"
         paper_arxiv_id: str | None = None
         if arxiv_url:
             paper_arxiv_id = arxiv_url.rstrip("/").split("/")[-1]
@@ -160,6 +171,9 @@ def _fetch_openalex(arxiv_id: str, limit: int = 50) -> dict:
         landing_page = primary_loc.get("landing_page_url") or ""
         url = arxiv_url or landing_page or ""
 
+        # Reconstruct abstract from inverted index
+        abstract = _reconstruct_abstract(work.get("abstract_inverted_index"))
+
         citing_papers.append({
             "title": work.get("display_name") or "",
             "authors": author_str,
@@ -168,6 +182,7 @@ def _fetch_openalex(arxiv_id: str, limit: int = 50) -> dict:
             "is_influential": False,  # not available from OpenAlex
             "url": url,
             "arxiv_id": paper_arxiv_id,
+            "abstract": abstract,
         })
 
     return {
@@ -266,6 +281,7 @@ def _fetch_semantic_scholar(arxiv_id: str, limit: int = 50) -> dict:
                 "is_influential": bool(item.get("isInfluential")),
                 "url": paper.get("url") or "",
                 "arxiv_id": paper_arxiv_id,
+                "abstract": paper.get("abstract") or "",
             })
 
         # Check if there are more pages
@@ -308,8 +324,20 @@ def fetch_citing_papers(arxiv_id: str, limit: int = 50) -> dict:
     return _fetch_openalex(arxiv_id, limit)
 
 
+_RELATION_LABELS = {
+    "core": "🔴 核心续作",
+    "extension": "🟠 扩展应用",
+    "application": "🟡 组件引用",
+    "survey": "🔵 综述收录",
+    "casual": "",
+}
+
+
 def format_descendants_section(citation_data: dict) -> str:
     """Format citation data into a markdown descendants section.
+
+    Filters out 0-citation papers. Shows relation classification
+    and one-line analysis for papers with abstracts.
 
     Args:
         citation_data: Dict returned by fetch_citing_papers().
@@ -323,45 +351,68 @@ def format_descendants_section(citation_data: dict) -> str:
     source = citation_data.get("source", "openalex")
     source_label = "OpenAlex" if source == "openalex" else "Semantic Scholar"
 
+    # Filter out 0-citation papers
+    citing_papers = [p for p in citing_papers if p.get("citation_count", 0) > 0]
+
     if not citing_papers:
         return (
             f"#### 后代 (Descendants) — 基于引用分析\n\n"
-            f"暂无引用数据\n"
+            f"> 截至 {fetch_date}，本文共被引用 **{total:,}** 次"
+            f"（数据来源：{source_label}）\n\n"
+            f"暂无高影响力引用论文。\n"
         )
 
-    total_fmt = f"{total:,}"
     header = (
         f"#### 后代 (Descendants) — 基于引用分析\n\n"
-        f"> 截至 {fetch_date}，本文共被引用 **{total_fmt}** 次"
+        f"> 截至 {fetch_date}，本文共被引用 **{total:,}** 次"
         f"（数据来源：{source_label}）\n\n"
     )
 
-    # Top 15 papers table
-    top_papers = citing_papers[:15]
-    table_lines = [
-        "##### 高影响力后续工作\n",
-        "| 论文 | 年份 | 被引数 | 是否核心引用 |",
-        "|------|------|--------|------------|",
-    ]
-    for p in top_papers:
-        title = p.get("title") or ""
-        authors = p.get("authors") or ""
-        year = p.get("year") or "—"
-        cite_count = p.get("citation_count") or 0
-        is_influential = p.get("is_influential", False)
+    # Split into core/meaningful vs casual
+    core_papers = [p for p in citing_papers if p.get("relation") in ("core", "extension", "application")]
+    other_papers = [p for p in citing_papers if p.get("relation") not in ("core", "extension", "application")]
 
-        # Truncate long titles
-        display_title = title
-        if len(display_title) > 50:
-            display_title = display_title[:48] + "..."
+    parts = [header]
 
-        paper_cell = f"{display_title} ({authors})" if authors else display_title
-        cite_fmt = f"{cite_count:,}"
-        influential_mark = "✓" if is_influential else ""
+    # Core follow-ups with detailed analysis
+    if core_papers:
+        parts.append("##### 核心后续工作\n")
+        for p in core_papers:
+            title = p.get("title") or ""
+            authors = p.get("authors") or ""
+            year = p.get("year") or "—"
+            cite_count = p.get("citation_count") or 0
+            relation = _RELATION_LABELS.get(p.get("relation", ""), "")
+            one_line = p.get("one_line") or ""
 
-        table_lines.append(f"| {paper_cell} | {year} | {cite_fmt} | {influential_mark} |")
+            parts.append(f"- **{title}** ({authors}, {year}) — 被引 {cite_count:,}")
+            if relation:
+                parts.append(f"  - {relation}")
+            if one_line:
+                parts.append(f"  - {one_line}")
+        parts.append("")
 
-    table_section = "\n".join(table_lines)
+    # Remaining notable papers as compact table
+    table_papers = [p for p in other_papers if p.get("relation") != "casual"]
+    # Also include papers without analysis (no abstract)
+    unanalyzed = [p for p in citing_papers if not p.get("relation") and p not in core_papers]
+    table_papers.extend(unanalyzed)
+
+    if table_papers:
+        parts.append("##### 其他引用\n")
+        parts.append("| 论文 | 年份 | 被引数 | 关系 |")
+        parts.append("|------|------|--------|------|")
+        for p in table_papers[:15]:
+            title = p.get("title") or ""
+            if len(title) > 50:
+                title = title[:48] + "..."
+            authors = p.get("authors") or ""
+            year = p.get("year") or "—"
+            cite_count = p.get("citation_count") or 0
+            relation = _RELATION_LABELS.get(p.get("relation", ""), "—")
+            paper_cell = f"{title} ({authors})" if authors else title
+            parts.append(f"| {paper_cell} | {year} | {cite_count:,} | {relation} |")
+        parts.append("")
 
     # Year-by-year trend
     year_counts: dict[int, int] = {}
@@ -370,13 +421,12 @@ def format_descendants_section(citation_data: dict) -> str:
         if y and isinstance(y, int):
             year_counts[y] = year_counts.get(y, 0) + 1
 
-    trend_section = ""
     if year_counts:
         sorted_years = sorted(year_counts.keys())
         trend_parts = [f"{y}: {year_counts[y]:,} 篇" for y in sorted_years]
-        trend_section = "\n\n##### 引用趋势\n- " + " | ".join(trend_parts)
+        parts.append("##### 引用趋势\n- " + " | ".join(trend_parts))
 
-    return header + table_section + trend_section + "\n"
+    return "\n".join(parts) + "\n"
 
 
 def enrich_mechanism_transfer(mechanism_transfer_md: str, citation_data: dict) -> str:

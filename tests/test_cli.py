@@ -7,112 +7,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from deepaper.cli import app
 
 runner = CliRunner()
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _make_config(tmp_path: Path) -> MagicMock:
-    """Build a mock Config pointing at tmp_path."""
-    cfg = MagicMock()
-    cfg.api_key = "test-key"
-    cfg.model = "claude-opus-4-6"
-    cfg.tag_model = "claude-opus-4-6"
-    cfg.papers_dir = "papers"
-    cfg.template = "default"
-    cfg.chromadb_dir = ".chromadb"
-    cfg.git_remote = ""
-    cfg.root_dir = tmp_path
-    cfg.papers_path = tmp_path / "papers"
-    cfg.chromadb_path = tmp_path / ".chromadb"
-    cfg.templates_path = tmp_path / "templates"
-    cfg.tmp_path = tmp_path / "tmp"
-    return cfg
-
-
-def _write_paper_note(papers_dir: Path, arxiv_id: str = "2301.00001", date: str = "2023-01-01") -> Path:
-    """Write a minimal paper note for use in tests."""
-    year_dir = papers_dir / date[:4]
-    year_dir.mkdir(parents=True, exist_ok=True)
-    note = year_dir / f"{arxiv_id}.md"
-    note.write_text(
-        f"---\narxiv_id: {arxiv_id}\ntitle: Test Paper\ndate: {date}\n"
-        "tags:\n- ml\nkeywords:\n- testing\n---\n\n"
-        "## 核心速览 (Executive Summary)\n\n**TL;DR:** X solves Y.\n\n"
-        "## 方法详解 (Methodology)\n\nWe use Y approach.\n",
-        encoding="utf-8",
-    )
-    return note
-
-
-# ---------------------------------------------------------------------------
-# init
-# ---------------------------------------------------------------------------
-
-class TestInit:
-    def test_init_creates_config_from_example(self, tmp_path: Path) -> None:
-        (tmp_path / "config.yaml.example").write_text(
-            "anthropic_api_key: \"\"\n", encoding="utf-8"
-        )
-
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["init"], catch_exceptions=False)
-        finally:
-            os.chdir(old_cwd)
-
-        assert result.exit_code == 0
-        assert (tmp_path / "config.yaml").exists()
-
-    def test_init_creates_obsidian_config(self, tmp_path: Path) -> None:
-        (tmp_path / "config.yaml.example").write_text(
-            "anthropic_api_key: \"\"\n", encoding="utf-8"
-        )
-
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = runner.invoke(app, ["init"], catch_exceptions=False)
-        finally:
-            os.chdir(old_cwd)
-
-        assert result.exit_code == 0
-        app_json = tmp_path / ".obsidian" / "app.json"
-        assert app_json.exists()
-        data = json.loads(app_json.read_text(encoding="utf-8"))
-        assert "userIgnoreFilters" in data
-        assert "src/" in data["userIgnoreFilters"]
-
-    def test_init_idempotent(self, tmp_path: Path) -> None:
-        """Running init twice should not raise errors."""
-        (tmp_path / "config.yaml.example").write_text(
-            "anthropic_api_key: \"\"\n", encoding="utf-8"
-        )
-
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result1 = runner.invoke(app, ["init"], catch_exceptions=False)
-            result2 = runner.invoke(app, ["init"], catch_exceptions=False)
-        finally:
-            os.chdir(old_cwd)
-
-        assert result1.exit_code == 0
-        assert result2.exit_code == 0
-        # Second run should note that files already exist
-        assert "already exists" in result2.output
-
-
-# ---------------------------------------------------------------------------
-# add
-# ---------------------------------------------------------------------------
 
 SAMPLE_METADATA = {
     "arxiv_id": "2301.00001",
@@ -124,304 +24,183 @@ SAMPLE_METADATA = {
     "url": "https://arxiv.org/abs/2301.00001",
 }
 
-SAMPLE_ANALYSIS = {
-    "research_question": "How can we improve testing?",
-    "background": "Testing matters.",
-    "method": "We propose a framework.",
-    "results": "30% improvement.",
-    "conclusions": "It works.",
-    "limitations": None,
-    "future_work": None,
-    "venue": None,
-    "keywords": ["testing", "automation"],
-}
 
+# ---------------------------------------------------------------------------
+# install
+# ---------------------------------------------------------------------------
 
-class TestAdd:
-    def test_add_processes_paper(self, tmp_path: Path) -> None:
-        """add command should fetch metadata, analyze, and write a note."""
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
-        cfg.tmp_path.mkdir(parents=True)
-        cfg.templates_path.mkdir(parents=True)
-        (cfg.templates_path / "default.md").write_text("Analyze this.", encoding="utf-8")
-
-        pdf_path = cfg.tmp_path / "2301.00001.pdf"
-        note_path = tmp_path / "papers" / "llm" / "pretraining" / "test-paper.md"
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.downloader.parse_arxiv_id", return_value="2301.00001"),
-            patch("deepaper.writer.find_existing", return_value=None),
-            patch("deepaper.downloader.fetch_metadata", return_value=SAMPLE_METADATA),
-            patch("deepaper.downloader.download_pdf", return_value=pdf_path),
-            patch("deepaper.templates.load_template", return_value="Analyze this."),
-            patch("deepaper.templates.render_prompt", return_value="prompt text"),
-            patch("deepaper.analyzer.analyze_paper", return_value=SAMPLE_ANALYSIS),
-            patch("deepaper.analyzer.generate_tags", return_value=["ml", "testing"]),
-            patch("deepaper.analyzer.classify_paper", return_value="llm/pretraining"),
-            patch("deepaper.writer.write_paper_note", return_value=note_path),
-            patch("deepaper.search.get_collection", return_value=MagicMock()),
-            patch("deepaper.search.index_paper"),
-        ):
-            result = runner.invoke(app, ["add", "https://arxiv.org/abs/2301.00001"])
-
+class TestInstall:
+    def test_install_creates_global_slash_command(self, tmp_path: Path) -> None:
+        cmd_path = tmp_path / ".claude" / "commands" / "deepaper.md"
+        with patch.object(Path, "home", return_value=tmp_path):
+            result = runner.invoke(app, ["install"])
         assert result.exit_code == 0
-        assert "Done" in result.output
-        assert "llm/pretraining" in result.output
-
-    def test_add_skips_existing_without_force(self, tmp_path: Path) -> None:
-        """Without --force, existing papers should be skipped."""
-        cfg = _make_config(tmp_path)
-        existing_note = tmp_path / "papers" / "2023" / "test.md"
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.downloader.parse_arxiv_id", return_value="2301.00001"),
-            patch("deepaper.writer.find_existing", return_value=existing_note),
-            patch("deepaper.downloader.fetch_metadata") as mock_fetch,
-        ):
-            result = runner.invoke(app, ["add", "2301.00001"])
-
-        assert result.exit_code == 0
-        assert "Skipping" in result.output
-        mock_fetch.assert_not_called()
-
-    def test_add_invalid_url_continues(self, tmp_path: Path) -> None:
-        """Invalid URL should print error and continue without crashing."""
-        cfg = _make_config(tmp_path)
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.downloader.parse_arxiv_id", side_effect=ValueError("bad url")),
-        ):
-            result = runner.invoke(app, ["add", "not-a-url"])
-
-        assert result.exit_code == 0
-        assert "Error" in result.output
-
-    def test_add_force_flag_passes_to_writer(self, tmp_path: Path) -> None:
-        """--force flag must be forwarded to write_paper_note."""
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
-        cfg.tmp_path.mkdir(parents=True)
-        cfg.templates_path.mkdir(parents=True)
-        (cfg.templates_path / "default.md").write_text("Analyze.", encoding="utf-8")
-
-        pdf_path = cfg.tmp_path / "2301.00001.pdf"
-        mock_write = MagicMock(return_value=tmp_path / "papers" / "test.md")
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.downloader.parse_arxiv_id", return_value="2301.00001"),
-            patch("deepaper.writer.find_existing", return_value=tmp_path / "papers" / "existing.md"),
-            patch("deepaper.downloader.fetch_metadata", return_value=SAMPLE_METADATA),
-            patch("deepaper.downloader.download_pdf", return_value=pdf_path),
-            patch("deepaper.templates.load_template", return_value="Analyze."),
-            patch("deepaper.templates.render_prompt", return_value="prompt"),
-            patch("deepaper.analyzer.analyze_paper", return_value=SAMPLE_ANALYSIS),
-            patch("deepaper.analyzer.generate_tags", return_value=["ml"]),
-            patch("deepaper.analyzer.classify_paper", return_value="misc"),
-            patch("deepaper.writer.write_paper_note", mock_write),
-            patch("deepaper.search.get_collection", return_value=MagicMock()),
-            patch("deepaper.search.index_paper"),
-        ):
-            result = runner.invoke(app, ["add", "--force", "2301.00001"])
-
-        assert result.exit_code == 0
-        # write_paper_note must be called with force=True
-        call_kwargs = mock_write.call_args
-        assert call_kwargs.kwargs.get("force") is True or (
-            len(call_kwargs.args) >= 5 and call_kwargs.args[4] is True
-        )
+        assert cmd_path.exists()
+        content = cmd_path.read_text()
+        assert "deepaper download" in content
+        assert "deepaper save" in content
 
 
 # ---------------------------------------------------------------------------
-# search
+# init
 # ---------------------------------------------------------------------------
 
-class TestSearch:
-    def test_search_displays_results(self, tmp_path: Path) -> None:
-        cfg = _make_config(tmp_path)
-        cfg.chromadb_path.mkdir(parents=True)
-
-        mock_results = [
-            {
-                "title": "Attention Is All You Need",
-                "arxiv_id": "1706.03762",
-                "score": 0.923,
-                "matched_section": "We propose a new architecture called the Transformer.",
-                "tags": "NLP, transformer",
-            }
-        ]
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.search.get_collection", return_value=MagicMock()),
-            patch("deepaper.search.search_papers", return_value=mock_results),
-        ):
-            result = runner.invoke(app, ["search", "attention mechanism"])
+class TestInit:
+    def test_init_creates_project(self, tmp_path: Path) -> None:
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            result = runner.invoke(app, ["init"], catch_exceptions=False)
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
-        assert "Attention Is All You Need" in result.output
-        assert "1706.03762" in result.output
-        assert "0.923" in result.output
+        assert (tmp_path / "config.yaml").exists()
+        assert (tmp_path / "papers").exists()
+        assert (tmp_path / ".claude" / "commands" / "deepaper.md").exists()
 
-    def test_search_no_index(self, tmp_path: Path) -> None:
-        """Should exit non-zero when ChromaDB index directory does not exist."""
-        cfg = _make_config(tmp_path)
-        # chromadb_path intentionally NOT created
-
-        with patch("deepaper.config.load_config", return_value=cfg):
-            result = runner.invoke(app, ["search", "transformers"])
-
-        assert result.exit_code != 0
-
-    def test_search_no_results_message(self, tmp_path: Path) -> None:
-        cfg = _make_config(tmp_path)
-        cfg.chromadb_path.mkdir(parents=True)
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.search.get_collection", return_value=MagicMock()),
-            patch("deepaper.search.search_papers", return_value=[]),
-        ):
-            result = runner.invoke(app, ["search", "nothing here"])
-
+    def test_init_idempotent(self, tmp_path: Path) -> None:
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            runner.invoke(app, ["init"], catch_exceptions=False)
+            result = runner.invoke(app, ["init"], catch_exceptions=False)
+        finally:
+            os.chdir(old_cwd)
         assert result.exit_code == 0
-        assert "No matching papers found" in result.output
+        assert "already exists" in result.output
 
 
 # ---------------------------------------------------------------------------
-# reindex
+# download
 # ---------------------------------------------------------------------------
 
-class TestReindex:
-    def test_reindex_reports_count(self, tmp_path: Path) -> None:
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
+class TestDownload:
+    def test_outputs_json(self, tmp_path: Path) -> None:
+        pdf_path = tmp_path / "tmp" / "2301.00001.pdf"
+        pdf_path.parent.mkdir(parents=True)
+        pdf_path.write_bytes(b"%PDF-1.4 test content here for size")
 
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.search.get_collection", return_value=MagicMock()),
-            patch("deepaper.search.reindex_all", return_value=7),
-        ):
-            result = runner.invoke(app, ["reindex"])
-
-        assert result.exit_code == 0
-        assert "7" in result.output
-
-    def test_reindex_no_papers_dir(self, tmp_path: Path) -> None:
-        """Should exit non-zero when papers directory does not exist."""
-        cfg = _make_config(tmp_path)
-        # papers_path intentionally NOT created
-
-        with patch("deepaper.config.load_config", return_value=cfg):
-            result = runner.invoke(app, ["reindex"])
-
-        assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# tag
-# ---------------------------------------------------------------------------
-
-class TestTag:
-    def test_tag_updates_frontmatter(self, tmp_path: Path) -> None:
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
-        _write_paper_note(cfg.papers_path)
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.analyzer.generate_tags", return_value=["new-tag", "ml"]),
-            patch("deepaper.writer.update_frontmatter") as mock_update,
-        ):
-            result = runner.invoke(app, ["tag"])
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            with (
+                patch("deepaper.downloader.parse_arxiv_id", return_value="2301.00001"),
+                patch("deepaper.downloader.fetch_metadata", return_value=SAMPLE_METADATA),
+                patch("deepaper.downloader.download_pdf", return_value=pdf_path),
+            ):
+                result = runner.invoke(app, ["download", "2301.00001"])
+        finally:
+            os.chdir(old_cwd)
 
         assert result.exit_code == 0
-        mock_update.assert_called_once()
-        new_fm = mock_update.call_args.args[1]
-        assert new_fm["tags"] == ["new-tag", "ml"]
+        data = json.loads(result.output)
+        assert data["arxiv_id"] == "2301.00001"
+        assert data["title"] == "Test Paper: A Survey of Testing"
+        assert data["pdf_path"].endswith(".pdf")
+        assert "size_mb" in data
 
-    def test_tag_limit_respected(self, tmp_path: Path) -> None:
-        """--limit N should process at most N papers."""
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
-        for i in range(5):
-            _write_paper_note(cfg.papers_path, arxiv_id=f"2301.0000{i}")
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.analyzer.generate_tags", return_value=["ml"]),
-            patch("deepaper.writer.update_frontmatter") as mock_update,
-        ):
-            result = runner.invoke(app, ["tag", "--limit", "2"])
-
-        assert result.exit_code == 0
-        assert mock_update.call_count == 2
-
-    def test_tag_since_filter(self, tmp_path: Path) -> None:
-        """--since should exclude papers before the given date."""
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
-        _write_paper_note(cfg.papers_path, arxiv_id="2101.00001", date="2021-06-01")
-        _write_paper_note(cfg.papers_path, arxiv_id="2301.00001", date="2023-01-01")
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("deepaper.analyzer.generate_tags", return_value=["ml"]),
-            patch("deepaper.writer.update_frontmatter") as mock_update,
-        ):
-            result = runner.invoke(app, ["tag", "--since", "2022-01-01"])
-
-        assert result.exit_code == 0
-        # Only the 2023 paper should be tagged
-        assert mock_update.call_count == 1
-
-    def test_tag_no_papers(self, tmp_path: Path) -> None:
-        """Empty papers dir should print a message and exit cleanly."""
-        cfg = _make_config(tmp_path)
-        cfg.papers_path.mkdir(parents=True)
-
-        with patch("deepaper.config.load_config", return_value=cfg):
-            result = runner.invoke(app, ["tag"])
-
-        assert result.exit_code == 0
-        assert "No papers" in result.output
+    def test_invalid_url(self, tmp_path: Path) -> None:
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            with patch("deepaper.downloader.parse_arxiv_id", side_effect=ValueError("bad")):
+                result = runner.invoke(app, ["download", "not-a-url"])
+        finally:
+            os.chdir(old_cwd)
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert "error" in data
 
 
 # ---------------------------------------------------------------------------
-# config
+# save
 # ---------------------------------------------------------------------------
 
-class TestConfigCmd:
-    def test_config_shows_settings(self, tmp_path: Path) -> None:
-        cfg = _make_config(tmp_path)
+class TestSave:
+    def _invoke_save(self, tmp_path, md_content, extra_args=None):
+        (tmp_path / "papers").mkdir(exist_ok=True)
+        input_file = tmp_path / "analysis.md"
+        input_file.write_text(md_content, encoding="utf-8")
+        args = ["save", "2301.00001", "--input", str(input_file)]
+        if extra_args:
+            args.extend(extra_args)
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(tmp_path)
+            with (
+                patch("deepaper.downloader.parse_arxiv_id", return_value="2301.00001"),
+                patch("deepaper.downloader.fetch_metadata", return_value=SAMPLE_METADATA),
+            ):
+                return runner.invoke(app, args)
+        finally:
+            os.chdir(old_cwd)
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.stdout = "OK"
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("subprocess.run", return_value=mock_proc),
-        ):
-            result = runner.invoke(app, ["config"])
-
+    def test_save_from_file(self, tmp_path: Path) -> None:
+        md = "---\nvenue: NeurIPS 2023\nkeywords:\n  - test\n---\n\n## 核心速览\n\nContent."
+        result = self._invoke_save(tmp_path, md, ["--category", "llm/pretraining"])
         assert result.exit_code == 0
-        assert "claude-opus-4-6" in result.output
-        assert "Claude Code CLI" in result.output
+        notes = list((tmp_path / "papers" / "llm" / "pretraining").glob("*.md"))
+        assert len(notes) == 1
+        content = notes[0].read_text(encoding="utf-8")
+        assert "NeurIPS 2023" in content
+        assert "2301.00001" in content
 
-    def test_config_api_error_reported(self, tmp_path: Path) -> None:
-        """A failed CLI check should report 'could not validate'."""
-        cfg = _make_config(tmp_path)
-
-        with (
-            patch("deepaper.config.load_config", return_value=cfg),
-            patch("subprocess.run", side_effect=Exception("connection error")),
-        ):
-            result = runner.invoke(app, ["config"])
-
+    def test_save_keywords_as_default_tags(self, tmp_path: Path) -> None:
+        result = self._invoke_save(tmp_path, "---\nkeywords:\n  - scaling\n  - LLM\n---\n\n## Body")
         assert result.exit_code == 0
-        assert "could not validate" in result.output
+        notes = list((tmp_path / "papers" / "misc").glob("*.md"))
+        fm = yaml.safe_load(notes[0].read_text()[3:notes[0].read_text().find("---", 3)])
+        assert fm["tags"] == ["scaling", "LLM"]
+
+    def test_save_explicit_tags(self, tmp_path: Path) -> None:
+        result = self._invoke_save(tmp_path, "---\nkeywords:\n  - old\n---\n\n## Body",
+                                   ["--tags", "new-1,new-2"])
+        assert result.exit_code == 0
+        notes = list((tmp_path / "papers" / "misc").glob("*.md"))
+        fm = yaml.safe_load(notes[0].read_text()[3:notes[0].read_text().find("---", 3)])
+        assert fm["tags"] == ["new-1", "new-2"]
+
+    def test_save_empty_input_errors(self, tmp_path: Path) -> None:
+        result = self._invoke_save(tmp_path, "")
+        assert result.exit_code == 1
+
+    def test_save_no_frontmatter(self, tmp_path: Path) -> None:
+        result = self._invoke_save(tmp_path, "## Raw markdown\n\nNo YAML.", ["--category", "misc"])
+        assert result.exit_code == 0
+        notes = list((tmp_path / "papers" / "misc").glob("*.md"))
+        content = notes[0].read_text(encoding="utf-8")
+        assert "Raw markdown" in content
+        assert "2301.00001" in content
+
+
+# ---------------------------------------------------------------------------
+# slash command template
+# ---------------------------------------------------------------------------
+
+class TestSlashCommandTemplate:
+    def _get_template(self):
+        cmd_path = Path(__file__).resolve().parent.parent / ".claude" / "commands" / "deepaper.md"
+        assert cmd_path.exists()
+        return cmd_path.read_text(encoding="utf-8")
+
+    def test_has_done_definitions(self):
+        content = self._get_template()
+        assert "Done =" in content
+        assert "至少2张" in content  # experiment tables
+        assert "至少3个" in content  # hidden costs
+        assert "缺一不可" in content  # transfer prescription
+        assert "至少3" in content and "前身" in content
+
+    def test_has_page_coverage_check(self):
+        content = self._get_template()
+        assert "coverage check" in content.lower() or "Page coverage" in content
+
+    def test_has_download_save_commands(self):
+        content = self._get_template()
+        assert "deepaper download" in content
+        assert "deepaper save" in content
+
+    def test_has_auto_install(self):
+        content = self._get_template()
+        assert "pip install deepaper" in content

@@ -30,7 +30,7 @@ def _sample_metadata() -> dict:
     }
 
 
-def _sample_analysis() -> dict:
+def _sample_analysis_fm() -> dict:
     return {
         "venue": "ICSE 2023",
         "publication_type": "conference",
@@ -42,14 +42,30 @@ def _sample_analysis() -> dict:
         "datasets": ["Defects4J", "SF110"],
         "metrics": ["branch coverage", "mutation score"],
         "code_url": "https://github.com/example/test-framework",
-        "executive_summary": "**TL;DR:** 新测试框架提升覆盖率30%。\n\n**一图流:** 旧方法是手动找针，新方法是磁铁吸针。",
-        "motivation": "**痛点:** 传统方法覆盖率低。\n\n**核心洞察:** 利用代码结构信息引导测试生成。",
-        "methodology": "### 直觉版\n旧方法随机生成，新方法按结构引导。\n\n### 精确版\nInput → Analyzer → Generator → Output",
-        "experiments": "**核心收益:** 覆盖率提升30%。\n\n**归因分析:** 结构引导贡献最大。",
-        "critical_review": "**隐性成本:** 分析阶段耗时增加2倍。\n\n**工程落地建议:** 注意大型项目的内存占用。",
-        "mechanism_transfer": "### 机制解耦\n结构引导生成可迁移到其他领域。\n\n### 迁移处方\n可用于API测试生成。",
-        "background_context": None,
     }
+
+
+def _sample_analysis_body() -> str:
+    return (
+        "## 核心速览 (Executive Summary)\n\n"
+        "**TL;DR:** 新测试框架提升覆盖率30%。\n\n"
+        "**一图流:** 旧方法是手动找针，新方法是磁铁吸针。\n\n"
+        "---\n\n"
+        "## 动机与第一性原理 (Motivation & First Principles)\n\n"
+        "**痛点:** 传统方法覆盖率低。\n\n**核心洞察:** 利用代码结构信息引导测试生成。\n\n"
+        "---\n\n"
+        "## 方法详解 (Methodology)\n\n"
+        "### 直觉版\n旧方法随机生成，新方法按结构引导。\n\n### 精确版\nInput → Analyzer → Generator → Output\n\n"
+        "---\n\n"
+        "## 实验与归因 (Experiments & Attribution)\n\n"
+        "**核心收益:** 覆盖率提升30%。\n\n**归因分析:** 结构引导贡献最大。\n\n"
+        "---\n\n"
+        "## 专家批判 (Critical Review)\n\n"
+        "**隐性成本:** 分析阶段耗时增加2倍。\n\n**工程落地建议:** 注意大型项目的内存占用。\n\n"
+        "---\n\n"
+        "## 机制迁移分析 (Mechanism Transfer Analysis)\n\n"
+        "### 机制解耦\n结构引导生成可迁移到其他领域。\n\n### 迁移处方\n可用于API测试生成。"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -157,10 +173,11 @@ def test_update_frontmatter_preserves_body(tmp_path: Path) -> None:
 
 def test_write_paper_note_creates_file(tmp_path: Path) -> None:
     metadata = _sample_metadata()
-    analysis = _sample_analysis()
+    analysis_fm = _sample_analysis_fm()
+    analysis_body = _sample_analysis_body()
     tags = ["machine-learning", "testing"]
 
-    path = write_paper_note(analysis, metadata, tags, tmp_path, category="llm/pretraining")
+    path = write_paper_note(analysis_fm, analysis_body, metadata, tags, tmp_path, category="llm/pretraining")
 
     assert path.exists()
     content = path.read_text(encoding="utf-8")
@@ -187,40 +204,40 @@ def test_write_paper_note_creates_file(tmp_path: Path) -> None:
     assert path.parent.name == "pretraining"
     assert path.parent.parent.name == "llm"
 
-    # Check body sections are present
+    # Check body sections are present (written by Claude, passed through as-is)
     assert "## 核心速览 (Executive Summary)" in content
     assert "## 动机与第一性原理" in content
     assert "## 方法详解 (Methodology)" in content
     assert "## 实验与归因" in content
     assert "## 专家批判 (Critical Review)" in content
     assert "## 机制迁移分析" in content
-    # background_context is None, should not appear
-    assert "背景知识补充" not in content
 
 
 def test_write_paper_note_skip_duplicate(tmp_path: Path) -> None:
     metadata = _sample_metadata()
-    analysis = _sample_analysis()
+    analysis_fm = _sample_analysis_fm()
+    analysis_body = _sample_analysis_body()
     tags = ["ml"]
 
-    write_paper_note(analysis, metadata, tags, tmp_path)
+    write_paper_note(analysis_fm, analysis_body, metadata, tags, tmp_path)
 
     with pytest.raises(FileExistsError) as exc_info:
-        write_paper_note(analysis, metadata, tags, tmp_path)
+        write_paper_note(analysis_fm, analysis_body, metadata, tags, tmp_path)
 
     assert "2301.00001" in str(exc_info.value)
 
 
 def test_write_paper_note_force_overwrites(tmp_path: Path) -> None:
     metadata = _sample_metadata()
-    analysis = _sample_analysis()
+    analysis_fm = _sample_analysis_fm()
+    analysis_body = _sample_analysis_body()
     tags = ["ml"]
 
-    first_path = write_paper_note(analysis, metadata, tags, tmp_path)
+    first_path = write_paper_note(analysis_fm, analysis_body, metadata, tags, tmp_path)
     assert first_path.exists()
 
     # Should not raise
-    second_path = write_paper_note(analysis, metadata, tags, tmp_path, force=True)
+    second_path = write_paper_note(analysis_fm, analysis_body, metadata, tags, tmp_path, force=True)
 
     # File should still exist and contain valid frontmatter
     content = second_path.read_text(encoding="utf-8")

@@ -5,8 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "deepaper"
 version = "0.1.0"
-description = "Deep paper analysis: AI-powered arxiv paper reading notes with Claude, Obsidian vault, and semantic search"
-license = "AGPL-3.0-or-later"
+description = "Paper knowledge base skill for Claude Code. Analyze arxiv papers with /deepaper."
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["arxiv", "paper", "research", "claude", "obsidian", "ai", "academic"]
@@ -22,15 +22,9 @@ classifiers = [
     "Topic :: Text Processing :: Markup :: Markdown",
 ]
 dependencies = [
-    "typer[all]>=0.9",
-    "anthropic>=0.40",
-    "chromadb>=0.4",
-    "gitpython>=3.1",
-    "pyyaml>=6.0",
-    "pdfplumber>=0.10",
+    "typer>=0.9",
     "httpx>=0.25",
-    "sentence-transformers>=2.2",
-    "pypdfium2",
+    "pyyaml>=6.0",
 ]
 
 [project.urls]
