@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepaper"
-version = "0.1.0"
+version = "0.2.0"
 description = "Paper knowledge base skill for Claude Code. Analyze arxiv papers with /deepaper."
 license = "MIT"
 readme = "README.md"
