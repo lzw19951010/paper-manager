@@ -295,3 +295,76 @@ def cite(
     else:
         typer.echo("")
         typer.echo(format_descendants_section(citation_data))
+
+
+# ---------------------------------------------------------------------------
+# registry
+# ---------------------------------------------------------------------------
+
+@app.command()
+def registry(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to build registry for."),
+) -> None:
+    """Build visual registry from extracted text and output as JSON."""
+    root = Path.cwd()
+    run_dir = root / ".deepaper" / "runs" / arxiv_id
+
+    from deepaper.pipeline_io import safe_read_json
+    text_by_page_raw = safe_read_json(str(run_dir / "text_by_page.json"), default={})
+    text_by_page = {int(k): v for k, v in text_by_page_raw.items()}
+
+    if not text_by_page:
+        typer.echo(json.dumps({"error": "text_by_page.json not found or empty"}))
+        raise typer.Exit(1)
+
+    from deepaper.registry import build_visual_registry
+    reg = build_visual_registry(text_by_page)
+
+    from deepaper.pipeline_io import safe_write_json
+    safe_write_json(str(run_dir / "visual_registry.json"), reg)
+
+    typer.echo(json.dumps(reg, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# gates
+# ---------------------------------------------------------------------------
+
+@app.command()
+def gates(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to run gates on."),
+) -> None:
+    """Run HardGates on merged analysis and output results as JSON."""
+    root = Path.cwd()
+    run_dir = root / ".deepaper" / "runs" / arxiv_id
+
+    merged_path = run_dir / "merged.md"
+    if not merged_path.exists():
+        typer.echo(json.dumps({"error": "merged.md not found"}))
+        raise typer.Exit(1)
+
+    merged_md = merged_path.read_text(encoding="utf-8")
+
+    from deepaper.pipeline_io import safe_read_json
+    registry_data = safe_read_json(str(run_dir / "visual_registry.json"))
+    text_by_page_raw = safe_read_json(str(run_dir / "text_by_page.json"))
+    text_by_page = (
+        {int(k): v for k, v in text_by_page_raw.items()}
+        if text_by_page_raw
+        else None
+    )
+
+    from deepaper.registry import build_coverage_checklist, identify_core_figures, compute_paper_profile
+    checklist = {}
+    core_figures = []
+    if text_by_page and registry_data:
+        profile = compute_paper_profile(text_by_page, registry_data)
+        core_figures = identify_core_figures(registry_data, text_by_page, profile["total_pages"])
+        checklist = build_coverage_checklist(
+            text_by_page, registry_data, profile.get("subsection_headings", [])
+        )
+
+    from deepaper.gates import run_hard_gates
+    result = run_hard_gates(merged_md, checklist, core_figures, text_by_page, registry_data)
+
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
