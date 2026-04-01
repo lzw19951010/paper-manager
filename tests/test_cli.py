@@ -184,17 +184,18 @@ class TestSlashCommandTemplate:
         assert cmd_path.exists()
         return cmd_path.read_text(encoding="utf-8")
 
-    def test_has_done_definitions(self):
+    def test_has_pipeline_structure(self):
         content = self._get_template()
-        assert "Done =" in content
-        assert "至少2张" in content  # experiment tables
-        assert "至少3个" in content  # hidden costs
-        assert "缺一不可" in content  # transfer prescription
-        assert "至少3" in content and "前身" in content
+        assert "HardGates" in content or "hardgates" in content.lower()
+        assert "SoftGates" in content or "Critic" in content
+        assert "Writer-Visual" in content or "writer-visual" in content.lower()
+        assert "StructCheck" in content or "struct_check" in content
 
-    def test_has_page_coverage_check(self):
+    def test_has_run_dir_structure(self):
         content = self._get_template()
-        assert "coverage check" in content.lower() or "Page coverage" in content
+        assert ".deepaper/runs/" in content
+        assert "text_by_page.json" in content
+        assert "visual_registry.json" in content
 
     def test_has_download_save_commands(self):
         content = self._get_template()
