@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/deepaper)](https://pypi.org/project/deepaper/)
 [![Python](https://img.shields.io/pypi/pyversions/deepaper)](https://pypi.org/project/deepaper/)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **[English](README.md)** | **中文**
 
@@ -60,7 +60,10 @@ cd my-papers && deepaper init
 ## 安装
 
 ```bash
-# 推荐：隔离安装
+# 推荐：uv（快速、隔离）
+uv tool install deepaper
+
+# 或使用 pipx
 pipx install deepaper
 
 # 或直接安装
@@ -70,7 +73,7 @@ pip install deepaper
 deepaper install
 ```
 
-> **前提：** 需要安装 [Claude Code CLI](https://claude.ai/code) 并已登录（Max 订阅）。还需要 PyMuPDF 用于 PDF 文本提取：`pip install PyMuPDF`。
+> **前提：** 需要安装 [Claude Code CLI](https://claude.ai/code) 并已登录（Max 订阅）。还需要 PyMuPDF 用于 PDF 文本提取：`uv pip install PyMuPDF` 或 `pip install PyMuPDF`。
 
 ## 使用方法
 
@@ -182,4 +185,4 @@ LIMIT 20
 
 ## License
 
-AGPL-3.0-or-later。详见 [LICENSE](LICENSE)。
+MIT。详见 [LICENSE](LICENSE)。

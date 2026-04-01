@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/deepaper)](https://pypi.org/project/deepaper/)
 [![Python](https://img.shields.io/pypi/pyversions/deepaper)](https://pypi.org/project/deepaper/)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **English** | **[中文](README_CN.md)**
 
@@ -60,7 +60,10 @@ A markdown note appears in `papers/` -- open it directly in Obsidian.
 ## Installation
 
 ```bash
-# Recommended: isolated install
+# Recommended: uv (fast, isolated)
+uv tool install deepaper
+
+# Or with pipx
 pipx install deepaper
 
 # Or direct install
@@ -70,7 +73,7 @@ pip install deepaper
 deepaper install
 ```
 
-> **Prerequisite:** [Claude Code CLI](https://claude.ai/code) installed and authenticated (Max subscription). PyMuPDF is also needed for PDF text extraction: `pip install PyMuPDF`.
+> **Prerequisite:** [Claude Code CLI](https://claude.ai/code) installed and authenticated (Max subscription). PyMuPDF is also needed for PDF text extraction: `uv pip install PyMuPDF` or `pip install PyMuPDF`.
 
 ## Usage
 
@@ -182,4 +185,4 @@ For richer influence scoring, optionally configure a [Semantic Scholar API key](
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
