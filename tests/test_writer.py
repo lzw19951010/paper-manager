@@ -244,3 +244,31 @@ def test_write_paper_note_force_overwrites(tmp_path: Path) -> None:
     fm_end = content.find("---", 3)
     fm = yaml.safe_load(content[3:fm_end])
     assert fm["arxiv_id"] == "2301.00001"
+
+
+def test_write_paper_note_with_quality_fields(tmp_path):
+    """write_paper_note should include quality, failed_gates, pipeline_version in frontmatter."""
+    import re
+    from deepaper.writer import write_paper_note
+    import yaml
+
+    metadata = {
+        "title": "Test Paper",
+        "authors": ["Author A"],
+        "date": "2024-01-01",
+        "arxiv_id": "2401.99999",
+        "url": "https://arxiv.org/abs/2401.99999",
+    }
+    analysis_fm = {"venue": "arxiv", "tldr": "A test paper"}
+    result = write_paper_note(
+        analysis_fm, "Body content", metadata, ["test"],
+        tmp_path, category="misc",
+        quality="partial", failed_gates=["S5", "S7"], pipeline_version=2,
+    )
+
+    content = result.read_text()
+    fm_match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
+    fm = yaml.safe_load(fm_match.group(1))
+    assert fm["quality"] == "partial"
+    assert fm["failed_gates"] == ["S5", "S7"]
+    assert fm["pipeline_version"] == 2
