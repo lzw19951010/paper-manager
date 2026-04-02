@@ -461,3 +461,60 @@ class TestGatesOnSlashV3:
         )
         result = run_hard_gates(md, {}, [], None, None)
         assert result["results"]["H6"]["passed"] is False
+
+
+# ===========================================================================
+# TestH9FlowchartMarker
+# ===========================================================================
+
+class TestH9FlowchartMarker:
+    """H9 should detect flowchart (chain of ≥3 arrows) in 方法详解."""
+
+    def test_flowchart_present(self):
+        from deepaper.content_checklist import check_content_markers
+
+        md = (
+            "#### 核心速览\n"
+            "TL;DR: 达到96.2%准确率\n一图流 mental model\n"
+            "[动作]+[对象]+[方式]+[效果]\n"
+            "#### 动机与第一性原理\nBecause A → Therefore B\n"
+            "#### 方法详解\n"
+            "##### 数值推演\nsome derivation\n"
+            "```python\nprint('hello')\n```\n"
+            "❌ wrong ✅ right\n"
+            "Input (B,T) → Encoder → Attention → FFN → Output (B,T,V)\n"
+            "#### 实验与归因\n归因分析\n"
+            "#### 专家批判\n隐性成本 100天 200GPU 3倍开销\n"
+            "#### 机制迁移分析\n"
+            "| 原语名称 | 本文用途 | 抽象描述 | 信息论直觉 |\n"
+            "| --- | --- | --- | --- |\n| A | B | C | D |\n"
+            "前身 Ancestors: X, Y, Z\n"
+        )
+        result = check_content_markers(md)
+        assert result["details"]["方法详解:流程图"] is True
+
+    def test_flowchart_missing(self):
+        from deepaper.content_checklist import check_content_markers
+
+        md = (
+            "#### 方法详解\n"
+            "##### 数值推演\nsome derivation\n"
+            "```python\nprint('hello')\n```\n"
+            "❌ wrong ✅ right\n"
+            "No flowchart here, just text.\n"
+        )
+        result = check_content_markers(md)
+        assert result["details"]["方法详解:流程图"] is False
+
+    def test_single_arrow_not_enough(self):
+        from deepaper.content_checklist import check_content_markers
+
+        md = (
+            "#### 方法详解\n"
+            "##### 数值推演\nsome derivation\n"
+            "```python\nprint('hello')\n```\n"
+            "❌ wrong ✅ right\n"
+            "A → B only one arrow\n"
+        )
+        result = check_content_markers(md)
+        assert result["details"]["方法详解:流程图"] is False

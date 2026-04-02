@@ -16,6 +16,7 @@ CONTENT_MARKERS: dict[str, list[dict]] = {
         {"marker": "数值推演", "check": "section_exists", "pattern": r"数值推演"},
         {"marker": "伪代码", "check": "contains_pattern", "pattern": r"```(?:python|pseudo|py)"},
         {"marker": "易混淆点", "check": "contains_pattern", "pattern": r"❌.*✅|✅.*❌"},
+        {"marker": "流程图", "check": "contains_pattern", "pattern": r"(?:→.*){2,}"},
     ],
     "实验与归因": [
         {"marker": "归因分析", "check": "section_exists", "pattern": r"(?:归因|ablation|贡献排序)"},
