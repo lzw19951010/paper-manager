@@ -7,6 +7,7 @@ CLI provides I/O utilities: download, save, cite, sync.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -375,3 +376,355 @@ def gates(
     result = run_hard_gates(merged_md, checklist, core_figures, text_by_page, registry_data)
 
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# extract
+# ---------------------------------------------------------------------------
+
+@app.command()
+def extract(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to extract."),
+) -> None:
+    """Extract text from PDF and build registry, profile, core figures."""
+    import fitz
+    from deepaper.pipeline_io import safe_write_json, ensure_run_dir
+    from deepaper.registry import (
+        build_visual_registry, compute_paper_profile,
+        identify_core_figures, extract_figure_contexts,
+    )
+
+    root = Path.cwd()
+    pdf_path = root / "tmp" / f"{arxiv_id}.pdf"
+    if not pdf_path.exists():
+        typer.echo(json.dumps({"error": f"PDF not found: {pdf_path}"}))
+        raise typer.Exit(1)
+
+    run_dir = ensure_run_dir(root, arxiv_id)
+
+    doc = fitz.open(str(pdf_path))
+    text_by_page: dict[str, str] = {}
+    full_lines: list[str] = []
+    for i, page in enumerate(doc):
+        text = page.get_text()
+        text_by_page[str(i + 1)] = text
+        full_lines.append(f"--- PAGE {i + 1} ---\n{text}")
+    doc.close()
+
+    safe_write_json(str(run_dir / "text_by_page.json"), text_by_page)
+    (run_dir / "text.txt").write_text("\n".join(full_lines), encoding="utf-8")
+
+    int_text = {int(k): v for k, v in text_by_page.items()}
+    registry_data = build_visual_registry(int_text)
+    safe_write_json(str(run_dir / "visual_registry.json"), registry_data)
+
+    profile = compute_paper_profile(int_text, registry_data)
+    safe_write_json(str(run_dir / "paper_profile.json"), profile)
+
+    core_figs = identify_core_figures(registry_data, int_text, profile["total_pages"])
+    safe_write_json(str(run_dir / "core_figures.json"), core_figs)
+
+    fig_contexts = extract_figure_contexts(int_text, core_figs)
+    safe_write_json(str(run_dir / "figure_contexts.json"), fig_contexts)
+
+    table_def_pages = sorted(set(
+        v["definition_page"] for v in registry_data.values()
+        if v.get("type") == "Table" and v.get("definition_page")
+    ))
+
+    typer.echo(json.dumps({
+        "run_dir": str(run_dir),
+        "total_pages": profile["total_pages"],
+        "num_tables": profile["num_tables"],
+        "num_figures": profile["num_figures"],
+        "num_equations": profile["num_equations"],
+        "core_figures": [cf["key"] for cf in core_figs],
+        "table_def_pages": table_def_pages,
+    }, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+
+@app.command()
+def check(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to check."),
+) -> None:
+    """Run StructCheck + Auditor on Extractor notes."""
+    from deepaper.pipeline_io import safe_read_json, safe_write_json, ensure_run_dir
+    from deepaper.extractor import struct_check, audit_coverage
+
+    root = Path.cwd()
+    run_dir = ensure_run_dir(root, arxiv_id)
+    notes_path = run_dir / "notes.md"
+
+    if not notes_path.exists():
+        typer.echo(json.dumps({"error": "notes.md not found"}))
+        raise typer.Exit(1)
+
+    notes = notes_path.read_text(encoding="utf-8")
+    text_by_page_raw = safe_read_json(str(run_dir / "text_by_page.json"), {})
+    text_by_page = {int(k): v for k, v in text_by_page_raw.items()}
+    profile = safe_read_json(str(run_dir / "paper_profile.json"), {})
+    total_pages = profile.get("total_pages", len(text_by_page))
+
+    sc = struct_check(notes, total_pages, profile)
+    ac = audit_coverage(text_by_page, notes, total_pages)
+
+    result = {
+        "passed": sc["passed"] and ac["coverage_ratio"] >= 0.7,
+        "struct_check": sc,
+        "audit": {"coverage_ratio": ac["coverage_ratio"], "uncovered_segments": ac["uncovered_segments"]},
+    }
+    safe_write_json(str(run_dir / "check.json"), result)
+    typer.echo(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# prompt
+# ---------------------------------------------------------------------------
+
+@app.command()
+def prompt(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID."),
+    role: Optional[str] = typer.Option(None, "--role", help="Agent role: extractor"),
+    split: bool = typer.Option(False, "--split", help="Auto-split into Writer prompts."),
+) -> None:
+    """Generate agent prompts."""
+    from deepaper.pipeline_io import safe_read_json, safe_write_json, ensure_run_dir
+    from deepaper.prompt_builder import (
+        parse_template_sections, extract_system_role,
+        auto_split, gates_to_constraints, generate_writer_prompt,
+    )
+    from deepaper.defaults import DEFAULT_TEMPLATE
+
+    root = Path.cwd()
+    run_dir = ensure_run_dir(root, arxiv_id)
+    pdf_path = root / "tmp" / f"{arxiv_id}.pdf"
+
+    if role == "extractor":
+        tmpl_path = Path(__file__).parent / "prompt_templates" / "extractor.md"
+        if not tmpl_path.exists():
+            typer.echo(json.dumps({"error": f"Template not found: {tmpl_path}"}))
+            raise typer.Exit(1)
+        tmpl = tmpl_path.read_text(encoding="utf-8")
+        profile = safe_read_json(str(run_dir / "paper_profile.json"), {})
+        prompt_text = (tmpl
+            .replace("{RUN_DIR}", str(run_dir))
+            .replace("{TOTAL_PAGES}", str(profile.get("total_pages", "?")))
+            .replace("{ARXIV_ID}", arxiv_id))
+        out_path = run_dir / "prompt_extractor.md"
+        out_path.write_text(prompt_text, encoding="utf-8")
+        typer.echo(json.dumps({"prompt_file": str(out_path)}))
+        return
+
+    if split:
+        profile = safe_read_json(str(run_dir / "paper_profile.json"), {})
+        registry_data = safe_read_json(str(run_dir / "visual_registry.json"), {})
+        core_figures = safe_read_json(str(run_dir / "core_figures.json"), [])
+        figure_contexts = safe_read_json(str(run_dir / "figure_contexts.json"), {})
+
+        table_def_pages = sorted(set(
+            v["definition_page"] for v in (registry_data or {}).values()
+            if v.get("type") == "Table" and v.get("definition_page")
+        ))
+
+        template_sections = parse_template_sections(DEFAULT_TEMPLATE)
+        system_role = extract_system_role(DEFAULT_TEMPLATE)
+        tasks = auto_split(profile or {})
+
+        writers_config: dict = {"writers": [], "merge_order": [], "figure_contexts": figure_contexts}
+
+        for task in tasks:
+            constraints = gates_to_constraints(
+                sections=task.sections,
+                profile=profile or {},
+                registry=registry_data or {},
+                core_figures=core_figures or [],
+            )
+            prompt_text = generate_writer_prompt(
+                task=task,
+                run_dir=str(run_dir),
+                template_sections=template_sections,
+                system_role=system_role,
+                figure_contexts=figure_contexts or {},
+                constraints=constraints,
+                pdf_path=str(pdf_path),
+                table_def_pages=table_def_pages,
+            )
+            prompt_file = run_dir / f"prompt_{task.name}.md"
+            prompt_file.write_text(prompt_text, encoding="utf-8")
+
+            output_file = f"part_{task.name.replace('writer-', '')}.md"
+            writers_config["writers"].append({
+                "name": task.name,
+                "sections": task.sections,
+                "prompt_file": str(prompt_file),
+                "output_file": output_file,
+            })
+
+        text_writers = [w for w in writers_config["writers"] if not w["name"].endswith("visual")]
+        visual_writers = [w for w in writers_config["writers"] if w["name"].endswith("visual")]
+        if len(text_writers) >= 2:
+            writers_config["merge_order"] = [text_writers[0]["name"], visual_writers[0]["name"], text_writers[1]["name"]]
+        elif text_writers:
+            writers_config["merge_order"] = [text_writers[0]["name"], visual_writers[0]["name"]]
+        else:
+            writers_config["merge_order"] = [visual_writers[0]["name"]]
+
+        safe_write_json(str(run_dir / "writers.json"), writers_config)
+        typer.echo(json.dumps(writers_config, ensure_ascii=False, indent=2))
+        return
+
+    typer.echo("Use --role extractor or --split")
+    raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# merge
+# ---------------------------------------------------------------------------
+
+@app.command()
+def merge(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to merge."),
+) -> None:
+    """Merge Writer outputs in canonical order."""
+    from deepaper.pipeline_io import safe_read_json, ensure_run_dir
+
+    root = Path.cwd()
+    run_dir = ensure_run_dir(root, arxiv_id)
+    config = safe_read_json(str(run_dir / "writers.json"))
+
+    if not config:
+        typer.echo(json.dumps({"error": "writers.json not found"}))
+        raise typer.Exit(1)
+
+    parts = []
+    for writer_name in config["merge_order"]:
+        writer = next((w for w in config["writers"] if w["name"] == writer_name), None)
+        if not writer:
+            continue
+        part_path = run_dir / writer["output_file"]
+        if part_path.exists():
+            parts.append(part_path.read_text(encoding="utf-8"))
+
+    merged = "\n\n".join(parts)
+
+    # Normalize: remove stray --- outside YAML frontmatter
+    if merged.startswith("---"):
+        fm_end = merged.find("---", 3)
+        if fm_end > 0:
+            yaml_block = merged[:fm_end + 3]
+            body = merged[fm_end + 3:]
+            body = re.sub(r"\n---\s*\n", "\n\n", body)
+            merged = yaml_block + body
+
+    # Remove stray title lines
+    merged = re.sub(r"^#{1,3}\s+.*(?:Part [ABC]|深度分析|部分).*\n+", "", merged, flags=re.MULTILINE)
+
+    merged_path = run_dir / "merged.md"
+    merged_path.write_text(merged, encoding="utf-8")
+    (run_dir / "final.md").write_text(merged, encoding="utf-8")
+
+    typer.echo(json.dumps({"merged": str(merged_path), "chars": len(merged)}))
+
+
+# ---------------------------------------------------------------------------
+# fix
+# ---------------------------------------------------------------------------
+
+@app.command()
+def fix(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to fix."),
+) -> None:
+    """Generate Fixer prompt from gate failures."""
+    from deepaper.pipeline_io import safe_read_json, ensure_run_dir
+
+    root = Path.cwd()
+    run_dir = ensure_run_dir(root, arxiv_id)
+    gates_result = safe_read_json(str(run_dir / "gates.json"))
+
+    if not gates_result:
+        typer.echo(json.dumps({"error": "gates.json not found"}))
+        raise typer.Exit(1)
+
+    if gates_result.get("passed", False):
+        typer.echo(json.dumps({"needs_fix": False}))
+        return
+
+    figure_contexts = safe_read_json(str(run_dir / "figure_contexts.json"), {})
+    lines = ["你是论文分析修复专员。以下问题来自 programmatic 质量检查，请逐一修复。\n"]
+    lines.append("## 需要修复的问题\n")
+
+    for gate_name in gates_result.get("failed", []):
+        gate = gates_result["results"].get(gate_name, {})
+        lines.append(f"### {gate_name}")
+
+        if gate_name == "H3":
+            for f in gate.get("failures", []):
+                lines.append(f"- 「{f['section']}」当前 {f['actual']:,} 字符 < {f['floor']:,} 门控")
+                lines.append("  → 从 notes.md 的相关段落补充内容")
+        elif gate_name == "H7":
+            for fig_key in gate.get("missing", []):
+                ctx = (figure_contexts or {}).get(fig_key, {})
+                lines.append(f"- {fig_key} 未被引用。Caption: {ctx.get('caption', 'N/A')}")
+        elif gate_name == "H9":
+            for marker in gate.get("missing", []):
+                lines.append(f"- {marker} 未找到")
+        else:
+            lines.append(f"- {json.dumps(gate, ensure_ascii=False)}")
+        lines.append("")
+
+    lines.append("## 输入")
+    lines.append(f"- 当前分析: {run_dir}/merged.md（直接修改此文件）")
+    lines.append(f"- 补充来源: {run_dir}/notes.md\n")
+    lines.append("## 规则")
+    lines.append("- 只修改有问题的部分，不要重写正常内容")
+    lines.append("- 修复后的文件保存为 merged_fixed.md（保留原 merged.md 不覆盖）")
+
+    prompt_text = "\n".join(lines)
+    prompt_path = run_dir / "prompt_fix.md"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+
+    typer.echo(json.dumps({
+        "needs_fix": True,
+        "prompt_file": str(prompt_path),
+        "failed": gates_result["failed"],
+    }))
+
+
+# ---------------------------------------------------------------------------
+# classify
+# ---------------------------------------------------------------------------
+
+@app.command()
+def classify(
+    arxiv_id: str = typer.Argument(..., help="arxiv ID to classify."),
+) -> None:
+    """Generate classification prompt from categories.md rules."""
+    from deepaper.pipeline_io import ensure_run_dir
+    from deepaper.config import load_config
+    from deepaper.templates import load_template
+
+    root = Path.cwd()
+    run_dir = ensure_run_dir(root, arxiv_id)
+    config = load_config(root)
+
+    notes_path = run_dir / "notes.md"
+    if not notes_path.exists():
+        typer.echo(json.dumps({"error": "notes.md not found"}))
+        raise typer.Exit(1)
+
+    notes = notes_path.read_text(encoding="utf-8")
+    meta_match = re.search(r"## META\n(.*?)(?=\n## |\Z)", notes, re.DOTALL)
+    summary = meta_match.group(1).strip() if meta_match else notes[:500]
+
+    categories = load_template("categories", config.templates_path)
+    classify_tmpl = load_template("classify", config.templates_path)
+
+    prompt_text = classify_tmpl.format(summary=summary, categories=categories)
+    prompt_path = run_dir / "prompt_classify.md"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+
+    typer.echo(json.dumps({"prompt_file": str(prompt_path)}))
