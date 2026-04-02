@@ -266,6 +266,61 @@ class TestGenerateWriterPrompt:
         assert "PDF" not in prompt or "paper.pdf" not in prompt
 
 
+class TestWriterTypeConstraints:
+    """gates_to_constraints should inject different clauses for visual vs text writers."""
+
+    def test_visual_writer_gets_flowchart_constraint(self):
+        from deepaper.prompt_builder import gates_to_constraints
+        constraints = gates_to_constraints(
+            sections=["方法详解", "实验与归因"],
+            profile={"total_pages": 10, "num_tables": 5, "num_equations": 3},
+            registry={"Table_1": {"type": "Table"}, "Table_2": {"type": "Table"}},
+            core_figures=[{"id": 1, "key": "Figure_1"}],
+        )
+        assert "数据流图" in constraints
+        assert "≥3" in constraints or "3 个" in constraints
+
+    def test_visual_writer_gets_figure_density_constraint(self):
+        from deepaper.prompt_builder import gates_to_constraints
+        constraints = gates_to_constraints(
+            sections=["方法详解", "实验与归因"],
+            profile={"total_pages": 10},
+            registry={},
+            core_figures=[{"id": 1, "key": "Figure_1"}, {"id": 3, "key": "Figure_3"}],
+        )
+        assert "至少出现 2 次" in constraints
+
+    def test_text_writer_gets_metaphor_constraint(self):
+        from deepaper.prompt_builder import gates_to_constraints
+        constraints = gates_to_constraints(
+            sections=["核心速览", "动机与第一性原理"],
+            profile={"total_pages": 10},
+            registry={},
+            core_figures=[],
+        )
+        assert "比喻" in constraints
+
+    def test_text_writer_gets_simple_example_constraint(self):
+        from deepaper.prompt_builder import gates_to_constraints
+        constraints = gates_to_constraints(
+            sections=["核心速览", "动机与第一性原理", "方法详解"],
+            profile={"total_pages": 10},
+            registry={},
+            core_figures=[],
+        )
+        assert "简化示例" in constraints
+
+    def test_incremental_annotation_for_experiments(self):
+        from deepaper.prompt_builder import gates_to_constraints
+        constraints = gates_to_constraints(
+            sections=["方法详解", "实验与归因"],
+            profile={"total_pages": 10, "num_tables": 3},
+            registry={"Table_1": {"type": "Table"}},
+            core_figures=[],
+        )
+        assert "95.9(+0.3)" in constraints or "增量" in constraints
+
+
 class TestTemplateEnhancements:
     """Verify DEFAULT_TEMPLATE contains new content and formatting guidance."""
 

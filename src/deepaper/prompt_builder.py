@@ -149,6 +149,39 @@ def gates_to_constraints(
     for m in markers:
         lines.append(f"- {m}（H9）")
 
+    # --- Writer-type-specific guidance (non-gate, contract only) ---
+    lines.append("\n**写作指引（非 gate，但强烈建议遵循）：**")
+
+    # Visual writer: flowchart + figure density
+    if "方法详解" in sections:
+        lines.append(
+            "- 「方法详解 → 精确版」必须包含 ≥1 个完整数据流图，"
+            "格式：Input → Step A → Step B → ... → Output，≥3 个箭头步骤（H9）"
+        )
+    if core_figures and ("方法详解" in sections or "实验与归因" in sections):
+        fig_ids = [f"Figure {cf['id']}" for cf in core_figures]
+        lines.append(
+            f"- 每个灵魂图（{', '.join(fig_ids)}）在正文中至少出现 2 次，"
+            "分布在不同段落（H10）"
+        )
+
+    # Text writer: metaphor + simple example
+    if "动机与第一性原理" in sections:
+        lines.append(
+            "- 「动机 → 物理/直觉解释」须包含一个生活化比喻，精准映射到技术机制"
+        )
+    if "方法详解" in sections:
+        lines.append(
+            "- 「方法详解 → 直觉版」须包含一个带具体数字的简化示例（≤200字），"
+            "让读者能手动跟算一遍"
+        )
+
+    # Formatting: incremental annotations in experiment tables
+    if "实验与归因" in sections:
+        lines.append(
+            "- 归因/ablation 表格数值后标注增量变化，格式：`95.9(+0.3)`"
+        )
+
     # Suggested targets
     lines.append("\n**建议目标：**")
     for sec in sections:
