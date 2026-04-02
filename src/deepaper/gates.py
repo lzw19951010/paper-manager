@@ -292,6 +292,36 @@ def check_core_figures_referenced(md: str, core_figures: list[dict]) -> dict:
 
 
 # ===========================================================================
+# H10: Figure Reference Density
+# ===========================================================================
+
+def check_figure_ref_density(md: str, core_figures: list[dict] | None) -> dict:
+    """Check each core figure is referenced >= 2 times in the body.
+
+    Returns ``{passed, failures, total_figures}``.
+    Skipped when *core_figures* is None or empty.
+    """
+    if not core_figures:
+        return {"passed": True, "skipped": True, "reason": "no core_figures"}
+
+    body = _extract_body(md)
+    failures: list[dict] = []
+
+    for fig in core_figures:
+        fig_id = fig.get("id", "")
+        label = f"Figure {fig_id}"
+        count = len(re.findall(re.escape(label), body, re.IGNORECASE))
+        if count < 2:
+            failures.append({"figure": label, "count": count, "required": 2})
+
+    return {
+        "passed": len(failures) == 0,
+        "failures": failures,
+        "total_figures": len(core_figures),
+    }
+
+
+# ===========================================================================
 # H8: Number Fingerprint
 # ===========================================================================
 
@@ -437,7 +467,7 @@ def run_hard_gates(
     text_by_page: dict[int, str] | None,
     registry: dict | None,
 ) -> dict:
-    """Run all 8 gates. Return summary dict.
+    """Run all hard gates (H1-H10). Return summary dict.
 
     When ``text_by_page`` or ``registry`` is None, gates H4, H7, and H8
     are skipped (marked ``{"passed": True, "skipped": True}``).
@@ -486,6 +516,12 @@ def run_hard_gates(
 
     # H9: Content Markers
     results["H9"] = check_content_markers(merged_md)
+
+    # H10: Figure Reference Density — requires core_figures
+    if core_figures:
+        results["H10"] = check_figure_ref_density(merged_md, core_figures)
+    else:
+        results["H10"] = dict(_SKIPPED)
 
     failed = [name for name, res in results.items() if not res.get("passed")]
     return {

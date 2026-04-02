@@ -518,3 +518,77 @@ class TestH9FlowchartMarker:
         )
         result = check_content_markers(md)
         assert result["details"]["方法详解:流程图"] is False
+
+
+class TestH10FigureRefDensity:
+    """H10: Each core figure referenced >= 2 times in body."""
+
+    def test_sufficient_density(self):
+        from deepaper.gates import check_figure_ref_density
+
+        md = (
+            "---\ntitle: Test\n---\n"
+            "#### 方法详解\n"
+            "As shown in Figure 1, the method works. We extend Figure 1's approach.\n"
+            "Figure 3 shows results. We revisit Figure 3 in the appendix.\n"
+        )
+        core_figures = [
+            {"id": "1", "key": "Figure_1"},
+            {"id": "3", "key": "Figure_3"},
+        ]
+        result = check_figure_ref_density(md, core_figures)
+        assert result["passed"] is True
+        assert result["failures"] == []
+
+    def test_insufficient_density(self):
+        from deepaper.gates import check_figure_ref_density
+
+        md = (
+            "---\ntitle: Test\n---\n"
+            "#### 方法详解\n"
+            "As shown in Figure 1, the method works.\n"
+            "Figure 3 shows results. We also see Figure 3 again.\n"
+        )
+        core_figures = [
+            {"id": "1", "key": "Figure_1"},
+            {"id": "3", "key": "Figure_3"},
+        ]
+        result = check_figure_ref_density(md, core_figures)
+        assert result["passed"] is False
+        assert len(result["failures"]) == 1
+        assert result["failures"][0]["figure"] == "Figure 1"
+        assert result["failures"][0]["count"] == 1
+
+    def test_no_core_figures_skipped(self):
+        from deepaper.gates import check_figure_ref_density
+
+        md = "---\ntitle: Test\n---\n#### Content\nSome text.\n"
+        result = check_figure_ref_density(md, None)
+        assert result["passed"] is True
+        assert result.get("skipped") is True
+
+    def test_empty_core_figures_skipped(self):
+        from deepaper.gates import check_figure_ref_density
+
+        md = "---\ntitle: Test\n---\n#### Content\nSome text.\n"
+        result = check_figure_ref_density(md, [])
+        assert result["passed"] is True
+        assert result.get("skipped") is True
+
+    def test_h10_in_run_hard_gates(self):
+        from deepaper.gates import run_hard_gates
+
+        md = (
+            "---\nbaselines:\n  - A\n  - B\ntldr: test 96.2% on 3 benchmarks\n---\n"
+            "#### 核心速览\n" + ("核" * 600) + "\n"
+            "#### 方法详解\nFigure 1 here and Figure 1 again.\n" + ("方" * 2100) + "\n"
+            "#### 实验与归因\n" + ("实" * 1600) + "\n"
+            "#### 动机与第一性原理\n" + ("动" * 900) + "\n"
+            "#### 专家批判\n" + ("专" * 900) + "\n"
+            "#### 机制迁移分析\n" + ("机" * 900) + "\n"
+            "#### 背景知识补充\n" + ("背" * 400) + "\n"
+        )
+        core_figures = [{"id": "1", "key": "Figure_1"}]
+        result = run_hard_gates(md, {}, core_figures, {1: "page text"}, None)
+        assert "H10" in result["results"]
+        assert result["results"]["H10"]["passed"] is True
