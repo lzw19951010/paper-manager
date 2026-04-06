@@ -516,6 +516,7 @@ def prompt(
         tmpl = tmpl_path.read_text(encoding="utf-8")
         profile = safe_read_json(str(run_dir / "paper_profile.json"), {})
         core_tables = safe_read_json(str(run_dir / "core_tables.json"), [])
+        core_figures = safe_read_json(str(run_dir / "core_figures.json"), [])
 
         # Compute read strategy based on text.txt line count
         text_path = run_dir / "text.txt"
@@ -525,6 +526,7 @@ def prompt(
         recommended_reads = max(1, -(-total_lines // 2000))  # ceil division
 
         core_tables_json = json.dumps(core_tables, ensure_ascii=False, indent=2) if core_tables else "（本论文未检测到核心表格候选）"
+        core_figures_json = json.dumps(core_figures, ensure_ascii=False, indent=2) if core_figures else "（本论文未检测到灵魂图）"
 
         prompt_text = (tmpl
             .replace("{RUN_DIR}", str(run_dir))
@@ -532,6 +534,7 @@ def prompt(
             .replace("{ARXIV_ID}", arxiv_id)
             .replace("{TOTAL_LINES}", str(total_lines))
             .replace("{RECOMMENDED_READS}", str(recommended_reads))
+            .replace("{CORE_FIGURES_JSON}", core_figures_json)
             .replace("{CORE_TABLES_JSON}", core_tables_json))
         out_path = run_dir / "prompt_extractor.md"
         out_path.write_text(prompt_text, encoding="utf-8")
