@@ -265,6 +265,65 @@ def _find_caption_text(
     return None
 
 
+MAX_CORE_TABLES = 8
+MIN_CORE_TABLE_SCORE = 2
+
+
+def identify_core_tables(
+    registry: dict,
+    text_by_page: dict[int, str],
+    total_pages: int,
+) -> list[dict]:
+    """Score each Table and return top core tables as candidates.
+
+    Scoring mirrors identify_core_figures:
+      - ref_count >= 3  (+3 points)
+      - ref_count >= 2  (+1 point, if not already +3)
+      - in first 30% of pages  (+2 points)
+      - caption length > 80 chars  (+1 point)
+
+    Budget: max(3, min(8, num_tables * 0.2))
+    Returns: [{key, id, page, score, ref_count}] sorted by score desc.
+    """
+    tables = {k: v for k, v in registry.items() if v["type"] == "Table"}
+    if not tables:
+        return []
+
+    early_cutoff = max(1, int(total_pages * 0.30))
+
+    scored: list[dict] = []
+    for key, entry in tables.items():
+        ref_count = len(entry["pages"])
+        def_page = entry.get("definition_page") or min(entry["pages"])
+
+        caption_text = _find_caption_text(text_by_page, "Table", entry["id"])
+        caption_len = len(caption_text) if caption_text else 0
+
+        score = 0
+        if ref_count >= 3:
+            score += 3
+        elif ref_count >= 2:
+            score += 1
+        if def_page <= early_cutoff:
+            score += 2
+        if caption_len > 80:
+            score += 1
+
+        scored.append({
+            "key": key,
+            "id": entry["id"],
+            "page": def_page,
+            "score": score,
+            "ref_count": ref_count,
+        })
+
+    scored = [s for s in scored if s["score"] >= MIN_CORE_TABLE_SCORE]
+    scored.sort(key=lambda x: (-x["score"], -x["ref_count"]))
+
+    budget = max(3, min(MAX_CORE_TABLES, int(len(tables) * 0.2)))
+    return scored[:budget]
+
+
 def extract_figure_contexts(
     text_by_page: dict[int, str],
     core_figures: list[dict],

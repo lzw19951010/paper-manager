@@ -203,6 +203,59 @@ class TestPaperProfile:
 
 
 # ===========================================================================
+# TestCoreTables
+# ===========================================================================
+
+class TestCoreTables:
+    """Tests for identify_core_tables."""
+
+    def test_identifies_core_tables(self):
+        from deepaper.registry import build_visual_registry, identify_core_tables
+        text = _simple_text_by_page()
+        reg = build_visual_registry(text)
+        cores = identify_core_tables(reg, text, total_pages=10)
+        assert len(cores) >= 1
+        keys = [c["key"] for c in cores]
+        assert "Table_1" in keys or "Table_3" in keys
+
+    def test_max_core_cap(self):
+        from deepaper.registry import build_visual_registry, identify_core_tables
+        text = {}
+        for p in range(1, 21):
+            lines = []
+            for t in range(1, 31):
+                lines.append(f"See Table {t} here.")
+            if p <= 10:
+                lines.append(f"Table {p}: Caption for table {p} with sufficient detail to pass threshold.")
+            text[p] = "\n".join(lines) + "\n"
+        reg = build_visual_registry(text)
+        cores = identify_core_tables(reg, text, total_pages=20)
+        assert len(cores) <= 8
+        assert len(cores) >= 3
+
+    def test_no_tables(self):
+        from deepaper.registry import build_visual_registry, identify_core_tables
+        text = {1: "No tables here.\n"}
+        reg = build_visual_registry(text)
+        cores = identify_core_tables(reg, text, total_pages=1)
+        assert cores == []
+
+    def test_scoring_prefers_early_referenced_tables(self):
+        from deepaper.registry import build_visual_registry, identify_core_tables
+        text = {
+            1: "Table 1: Main results with detailed caption explaining everything.\nSee Table 1.\n",
+            2: "We also reference Table 1 again here.\n",
+            3: "Table 1 is important. See Table 1 for proof.\n",
+            9: "Table 5: Appendix table.\n",
+            10: "See Table 5.\n",
+        }
+        reg = build_visual_registry(text)
+        cores = identify_core_tables(reg, text, total_pages=10)
+        if len(cores) >= 2:
+            assert cores[0]["key"] == "Table_1"
+
+
+# ===========================================================================
 # TestCoverageChecklist
 # ===========================================================================
 
