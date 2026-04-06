@@ -515,10 +515,24 @@ def prompt(
             raise typer.Exit(1)
         tmpl = tmpl_path.read_text(encoding="utf-8")
         profile = safe_read_json(str(run_dir / "paper_profile.json"), {})
+        core_tables = safe_read_json(str(run_dir / "core_tables.json"), [])
+
+        # Compute read strategy based on text.txt line count
+        text_path = run_dir / "text.txt"
+        total_lines = 0
+        if text_path.exists():
+            total_lines = sum(1 for _ in text_path.open(encoding="utf-8"))
+        recommended_reads = max(1, -(-total_lines // 2000))  # ceil division
+
+        core_tables_json = json.dumps(core_tables, ensure_ascii=False, indent=2) if core_tables else "（本论文未检测到核心表格候选）"
+
         prompt_text = (tmpl
             .replace("{RUN_DIR}", str(run_dir))
             .replace("{TOTAL_PAGES}", str(profile.get("total_pages", "?")))
-            .replace("{ARXIV_ID}", arxiv_id))
+            .replace("{ARXIV_ID}", arxiv_id)
+            .replace("{TOTAL_LINES}", str(total_lines))
+            .replace("{RECOMMENDED_READS}", str(recommended_reads))
+            .replace("{CORE_TABLES_JSON}", core_tables_json))
         out_path = run_dir / "prompt_extractor.md"
         out_path.write_text(prompt_text, encoding="utf-8")
         typer.echo(json.dumps({"prompt_file": str(out_path)}))
