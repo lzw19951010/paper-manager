@@ -30,15 +30,17 @@ class SectionSpec:
 # ---------------------------------------------------------------------------
 
 FRONTMATTER_FIELDS: dict[str, FieldSpec] = {
-    "venue": FieldSpec(type="str_or_null"),
-    "publication_type": FieldSpec(type="str"),
+    "title": FieldSpec(type="str"),
+    "arxiv_id": FieldSpec(type="str"),
+    "date": FieldSpec(type="str_or_null"),
+    "url": FieldSpec(type="str_or_null"),
+    "category": FieldSpec(type="str"),
     "tldr": FieldSpec(type="str", min_numbers=2),
-    "core_contribution": FieldSpec(type="str"),
     "baselines": FieldSpec(type="list", min_items=2),
-    "datasets": FieldSpec(type="list", min_items=1),
-    "metrics": FieldSpec(type="list", min_items=1),
-    "keywords": FieldSpec(type="list", min_items=5),
-    "code_url": FieldSpec(type="str_or_null"),
+    "tags": FieldSpec(type="list", min_items=1),
+    "mechanisms": FieldSpec(type="list", min_items=1),
+    "key_tradeoffs": FieldSpec(type="list", min_items=1),
+    "key_numbers": FieldSpec(type="list", min_items=1),
 }
 
 # ---------------------------------------------------------------------------
@@ -58,39 +60,30 @@ CODE_BLOCKS_EXEMPT_FROM_HEADING_CHECK = True
 # Section definitions with char floors and H9 content markers
 SECTIONS: list[SectionSpec] = [
     SectionSpec(
-        name="动机与第一性原理",
-        min_chars=400,
-        content_markers=["causal_chain"],
-    ),
-    SectionSpec(
         name="核心速览",
-        min_chars=300,
-        content_markers=["tldr_with_numbers", "mental_model", "mechanism_one_line"],
+        min_chars=0,
+        content_markers=["tldr_with_numbers", "mechanism_one_line", "key_numbers_table"],
     ),
     SectionSpec(
-        name="方法详解",
-        min_chars=1500,
-        content_markers=["numerical_example", "pseudocode", "confusion_pairs", "flowchart"],
+        name="第一性原理分析",
+        min_chars=0,
+        content_markers=["numbered_causal_chain"],
     ),
     SectionSpec(
-        name="实验与归因",
-        min_chars=800,
-        content_markers=["attribution_analysis"],
+        name="技术精要",
+        min_chars=0,
+        content_markers=[
+            "method_flowchart",
+            "design_decisions_table",
+            "ablation_ranking_table",
+            "confusion_pairs",
+            "hidden_costs_table",
+        ],
     ),
     SectionSpec(
-        name="专家批判",
-        min_chars=500,
-        content_markers=["hidden_costs_with_numbers"],
-    ),
-    SectionSpec(
-        name="机制迁移分析",
-        min_chars=600,
+        name="机制迁移",
+        min_chars=0,
         content_markers=["mechanism_table", "ancestors"],
-    ),
-    SectionSpec(
-        name="背景知识补充",
-        min_chars=200,
-        content_markers=[],
     ),
 ]
 
