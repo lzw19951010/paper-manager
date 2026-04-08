@@ -3,39 +3,43 @@ import pytest
 
 
 class TestParseTemplateSections:
-    def test_extracts_all_seven_sections(self):
+    def test_extracts_all_four_sections(self):
         from deepaper.prompt_builder import parse_template_sections
         from deepaper.defaults import DEFAULT_TEMPLATE
 
         sections = parse_template_sections(DEFAULT_TEMPLATE)
         expected_keys = [
             "核心速览",
-            "动机与第一性原理",
-            "方法详解",
-            "实验与归因",
-            "专家批判",
-            "机制迁移分析",
-            "背景知识补充",
+            "第一性原理分析",
+            "技术精要",
+            "机制迁移",
         ]
+        assert set(sections.keys()) == set(expected_keys)
         for key in expected_keys:
-            assert key in sections, f"Missing section: {key}"
-            assert len(sections[key]) > 50, f"Section {key} too short: {len(sections[key])}"
+            assert len(sections[key]) > 100, f"Section {key} too short: {len(sections[key])}"
 
     def test_sections_contain_key_markers(self):
         from deepaper.prompt_builder import parse_template_sections
         from deepaper.defaults import DEFAULT_TEMPLATE
 
         sections = parse_template_sections(DEFAULT_TEMPLATE)
+        # 核心速览: TL;DR + 核心机制一句话 + 关键数字表
         assert "TL;DR" in sections["核心速览"]
-        assert "一图流" in sections["核心速览"]
-        assert "Because" in sections["动机与第一性原理"]
-        assert "数值推演" in sections["方法详解"]
-        assert "伪代码" in sections["方法详解"]
-        assert "易混淆点" in sections["方法详解"]
-        assert "归因分析" in sections["实验与归因"]
-        assert "隐性成本" in sections["专家批判"]
-        assert "机制解耦" in sections["机制迁移分析"]
-        assert "迁移处方" in sections["机制迁移分析"]
+        assert "核心机制" in sections["核心速览"]
+        assert "关键数字" in sections["核心速览"]
+        # 第一性原理分析: 痛点 + 因果链 with [C1] prefix
+        assert "痛点" in sections["第一性原理分析"]
+        assert "[C1]" in sections["第一性原理分析"]
+        assert "Because" in sections["第一性原理分析"]
+        # 技术精要: method flow + formula table + design decisions + ablation + confusions + hidden costs
+        assert "方法流程" in sections["技术精要"]
+        assert "设计决策" in sections["技术精要"]
+        assert "消融排序" in sections["技术精要"]
+        assert "易混淆点" in sections["技术精要"]
+        assert "隐性成本" in sections["技术精要"]
+        # 机制迁移: decomposition table + lineage (Ancestors)
+        assert "机制解耦" in sections["机制迁移"]
+        assert "前身" in sections["机制迁移"] or "Ancestors" in sections["机制迁移"]
 
 
 class TestExtractSystemRole:
@@ -54,11 +58,17 @@ class TestExtractFrontmatterSpec:
         from deepaper.defaults import DEFAULT_TEMPLATE
 
         spec = extract_frontmatter_spec(DEFAULT_TEMPLATE)
-        assert "venue" in spec
-        assert "baselines" in spec
-        assert "datasets" in spec
-        assert "metrics" in spec
+        # Required new fields
         assert "tldr" in spec
+        assert "baselines" in spec
+        assert "tags" in spec
+        assert "mechanisms" in spec
+        assert "key_tradeoffs" in spec
+        assert "key_numbers" in spec
+        # Removed fields should NOT be present
+        assert "datasets" not in spec
+        assert "metrics" not in spec
+        assert "keywords" not in spec
 
 
 class TestAutoSplit:

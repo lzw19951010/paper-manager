@@ -52,7 +52,7 @@ def extract_frontmatter_spec(template: str) -> str:
     # Look for the ``` block that contains venue:/baselines:/datasets:
     blocks = re.findall(r"```\s*\n(.*?)\n```", template, re.DOTALL)
     for block in blocks:
-        if "venue:" in block and "baselines:" in block:
+        if "baselines:" in block and ("venue:" in block or "tldr:" in block):
             return block
     return ""
 
