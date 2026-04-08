@@ -287,3 +287,42 @@ class TestCoverageChecklist:
         from deepaper.registry import build_coverage_checklist
         checklist = build_coverage_checklist({}, {}, [])
         assert checklist == {} or len(checklist) == 0
+
+
+# ===========================================================================
+# TestSubsectionHeadingFilter
+# ===========================================================================
+
+class TestSubsectionHeadingFilter:
+    """Subsection detection must not match table row labels."""
+
+    def test_legitimate_subsection_detected(self):
+        from deepaper.registry import compute_paper_profile
+        text_by_page = {
+            1: "intro",
+            2: "3.1 Main Results for Olmo 3 Base\nSome body text here.\n"
+               "3.2 Modeling and Architecture\nMore body text.\n",
+        }
+        registry = {}
+        profile = compute_paper_profile(text_by_page, registry)
+        headings = profile["subsection_headings"]
+        assert any("Main Results for Olmo 3 Base" in h for h in headings)
+        assert any("Modeling and Architecture" in h for h in headings)
+
+    def test_table_row_labels_filtered(self):
+        from deepaper.registry import compute_paper_profile
+        text_by_page = {
+            1: "2.3 HarmBench\n"
+               "1.0 Bits-per-byte\n"
+               "14.5 GPQA\n"
+               "3.1 Our Real Section Name Here\n",
+        }
+        registry = {}
+        profile = compute_paper_profile(text_by_page, registry)
+        headings = profile["subsection_headings"]
+        # Only the multi-word section name should be detected
+        assert any("Our Real Section Name Here" in h for h in headings)
+        # Single-word table labels should be filtered
+        assert not any("HarmBench" in h and len(h.split()) <= 2 for h in headings)
+        assert not any("Bits-per-byte" in h and len(h.split()) <= 2 for h in headings)
+        assert not any("GPQA" in h and len(h.split()) <= 2 for h in headings)

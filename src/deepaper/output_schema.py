@@ -98,9 +98,16 @@ CHAR_FLOORS: dict[str, int] = {s.name: s.min_chars for s in SECTIONS}
 # ---------------------------------------------------------------------------
 
 # H2: Structural coverage
-# Subsection regex must require at least one letter after the number,
-# to avoid matching table cell values like "96.2 49.2".
-H2_SUBSECTION_REGEX = r"^((?:[1-9]|1\d|20)\.\d{1,2}\.?\s+[A-Za-z].*)$"
+# Subsection regex requires:
+#   - numeric prefix like "3.1" or "10.2"
+#   - capitalized word start
+#   - at least THREE whitespace-separated tokens after the number
+#     (real section titles are multi-word like "Main Results for Olmo 3 Base";
+#     table row labels are typically 1-2 words like "BBH" or "MATH 500")
+H2_SUBSECTION_REGEX = (
+    r"^((?:[1-9]|1\d|20)\.\d{1,2}\.?\s+[A-Z][A-Za-z]+"
+    r"(?:\s+[A-Za-z0-9][\w-]*){2,}.*)$"
+)
 H2_MIN_COVERAGE = 0.6
 
 # H8: Number fingerprint
