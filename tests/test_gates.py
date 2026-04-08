@@ -590,6 +590,36 @@ class TestH10FigureRefDensity:
         assert result["results"]["H10"]["passed"] is True
 
 
+class TestH1V2FrontmatterFields:
+    """H1 v2: frontmatter gains new structured fields."""
+
+    def test_v2_fields_accepted(self):
+        from deepaper.gates import check_baselines_format
+        md = (
+            "---\n"
+            "title: Test\n"
+            "baselines:\n"
+            "  - ModelA\n"
+            "  - ModelB\n"
+            "tags:\n"
+            "  - pretraining\n"
+            "mechanisms:\n"
+            "  - name: M1\n"
+            "    scope: pretrain\n"
+            "key_tradeoffs:\n"
+            "  - decision: D1\n"
+            "    reason: R1\n"
+            "key_numbers:\n"
+            "  - metric: MATH\n"
+            "    value: 96.2\n"
+            "tldr: \"Paper with MATH 96.2% and AIME 80.6%\"\n"
+            "---\n"
+            "#### 核心速览\ncontent\n"
+        )
+        result = check_baselines_format(md)
+        assert result["passed"] is True
+
+
 class TestH4Removed:
     """H4 (Table Count) should always be skipped."""
 
