@@ -5,29 +5,45 @@ import re
 
 CONTENT_MARKERS: dict[str, list[dict]] = {
     "核心速览": [
-        {"marker": "TL;DR", "check": "contains_pattern", "pattern": r"TL;DR.*\d+"},
-        {"marker": "一图流", "check": "section_exists", "pattern": r"一图流"},
-        {"marker": "核心机制一句话", "check": "contains_pattern", "pattern": r"\[.+?\].*\+.*\[.+?\]"},
+        # TL;DR must contain at least one number
+        {"marker": "tldr_with_numbers", "check": "contains_pattern",
+         "pattern": r"TL;DR.*?\d+(?:\.\d+)?"},
+        # Mechanism one-liner with [动作] + [对象] format
+        {"marker": "mechanism_one_line", "check": "contains_pattern",
+         "pattern": r"\[.+?\].*?\+.*?\[.+?\]"},
+        # Key numbers table header (standardized columns)
+        {"marker": "key_numbers_table", "check": "contains_pattern",
+         "pattern": r"\|\s*指标\s*\|\s*数值\s*\|\s*基线\s*\|\s*基线值\s*\|\s*增益\s*\|"},
     ],
-    "动机与第一性原理": [
-        {"marker": "因果链", "check": "contains_pattern", "pattern": r"(?:Because|因为|由于).*(?:→|Therefore|所以|因此)"},
+    "第一性原理分析": [
+        # Numbered causal chain with [C1] prefix + Because/Therefore
+        {"marker": "numbered_causal_chain", "check": "contains_pattern",
+         "pattern": r"\[C\d+\].*?(?:Because|因为).*?(?:→|Therefore|所以|因此)"},
     ],
-    "方法详解": [
-        {"marker": "数值推演", "check": "section_exists", "pattern": r"数值推演"},
-        {"marker": "伪代码", "check": "contains_pattern", "pattern": r"```(?:python|pseudo|py)"},
-        {"marker": "易混淆点", "check": "contains_pattern", "pattern": r"❌.*✅|✅.*❌"},
-        {"marker": "流程图", "check": "contains_pattern", "pattern": r"(?:→.*){2,}"},
+    "技术精要": [
+        # Flowchart: at least 3 arrow steps
+        {"marker": "method_flowchart", "check": "contains_pattern",
+         "pattern": r"(?:→.*?){3,}"},
+        # Design decisions table header
+        {"marker": "design_decisions_table", "check": "contains_pattern",
+         "pattern": r"\|\s*决策\s*\|\s*备选方案\s*\|\s*选择理由\s*\|\s*证据来源\s*\|"},
+        # Ablation ranking table header
+        {"marker": "ablation_ranking_table", "check": "contains_pattern",
+         "pattern": r"\|\s*排名\s*\|\s*组件\s*\|\s*增益\s*\|\s*数据来源\s*\|"},
+        # Confusion pairs: ❌ and ✅
+        {"marker": "confusion_pairs", "check": "contains_pattern",
+         "pattern": r"❌.*?✅|✅.*?❌"},
+        # Hidden costs table header
+        {"marker": "hidden_costs_table", "check": "contains_pattern",
+         "pattern": r"\|\s*成本项\s*\|\s*量化数据\s*\|\s*对决策的影响\s*\|"},
     ],
-    "实验与归因": [
-        {"marker": "归因分析", "check": "section_exists", "pattern": r"(?:归因|ablation|贡献排序)"},
-    ],
-    "专家批判": [
-        {"marker": "隐性成本含数字", "check": "contains_numbers_in_section", "min_count": 3},
-    ],
-    "机制迁移分析": [
-        {"marker": "机制解耦表格", "check": "contains_pattern",
-         "pattern": r"\|.*(?:原语|名称).*\|.*(?:用途|本文).*\|"},
-        {"marker": "前身Ancestors", "check": "contains_pattern", "pattern": r"(?:前身|Ancestor)"},
+    "机制迁移": [
+        # Mechanism decomposition table header
+        {"marker": "mechanism_table", "check": "contains_pattern",
+         "pattern": r"\|\s*原语名称\s*\|\s*本文用途\s*\|\s*抽象描述\s*\|"},
+        # Ancestors list
+        {"marker": "ancestors", "check": "contains_pattern",
+         "pattern": r"(?:前身|Ancestors)"},
     ],
 }
 
