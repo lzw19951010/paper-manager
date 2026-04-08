@@ -17,14 +17,17 @@ from deepaper.output_schema import (
 # Canonical section names and their order (matches DEFAULT_TEMPLATE)
 SECTION_ORDER = _SCHEMA_SECTION_ORDER
 
-# Sections that require PDF table pages and visual verification
-VISUAL_SECTIONS = ["方法详解", "实验与归因"]
+# Sections that may benefit from PDF table pages for verification
+VISUAL_SECTIONS = ["技术精要"]
 
-# Slug mapping for visual writer names
-_VISUAL_SLUGS: dict[str, str] = {
-    "方法详解": "method",
-    "实验与归因": "experiment",
-}
+# Writer task definitions for the v2 4-section layout.
+# Fixed assignment: paper length does not affect split.
+WRITER_ASSIGNMENTS: list[tuple[str, list[str], bool]] = [
+    # (writer_name, sections, needs_pdf_pages)
+    ("writer-overview", ["核心速览", "机制迁移"], False),
+    ("writer-principle", ["第一性原理分析"], False),
+    ("writer-technical", ["技术精要"], True),
+]
 
 # Section heading pattern in DEFAULT_TEMPLATE: **## 中文名 (English Name)**
 _TEMPLATE_SECTION_RE = re.compile(
@@ -310,55 +313,22 @@ def generate_writer_prompt(
 
 
 def auto_split(profile: dict) -> list[WriterTask]:
-    """Split sections across Writers: visual fixed, text by workload."""
-    text_sections = [s for s in SECTION_ORDER if s not in VISUAL_SECTIONS]
+    """Split sections across 3 Writers with a fixed assignment.
 
-    workloads = {
-        s: CHAR_FLOORS.get(s, 500) * compute_scaling_factor(s, profile)
-        for s in text_sections
-    }
+    In v2 we use a fixed 3-writer layout regardless of paper length:
+    - writer-overview: 核心速览 + 机制迁移 (both need global view)
+    - writer-principle: 第一性原理分析 (independent causal reasoning)
+    - writer-technical: 技术精要 (method + experiment + critique merged)
 
-    visual_workload = sum(
-        CHAR_FLOORS.get(s, 1000) * compute_scaling_factor(s, profile)
-        for s in VISUAL_SECTIONS
-    )
-
-    total_text = sum(workloads.values())
-    # Use 2 text writers when text workload is substantial relative to
-    # the average section floor, regardless of visual workload size.
-    avg_floor = sum(CHAR_FLOORS.get(s, 500) for s in text_sections) / len(text_sections)
-    if total_text < avg_floor * len(text_sections) * 1.5:
-        n_text = 1
-    else:
-        n_text = 2
-    n_text = min(n_text, len(text_sections))
-
-    sorted_sections = sorted(text_sections, key=lambda s: workloads[s], reverse=True)
-    bins: list[list[str]] = [[] for _ in range(n_text)]
-    bin_loads = [0.0] * n_text
-
-    for sec in sorted_sections:
-        lightest = min(range(n_text), key=lambda i: bin_loads[i])
-        bins[lightest].append(sec)
-        bin_loads[lightest] += workloads[sec]
-
-    for b in bins:
-        b.sort(key=lambda s: SECTION_ORDER.index(s))
-
+    Long papers grow tables (not prose), so 3 writers is enough for any
+    paper length. The ``profile`` arg is retained for interface stability.
+    """
+    _ = profile  # interface compatibility; length no longer affects split
     tasks: list[WriterTask] = []
-    # Each visual section gets its own writer for parallel execution
-    for sec in VISUAL_SECTIONS:
-        slug = _VISUAL_SLUGS.get(sec, sec)
+    for name, sections, needs_pdf in WRITER_ASSIGNMENTS:
         tasks.append(WriterTask(
-            name=f"writer-{slug}",
-            sections=[sec],
-            needs_pdf_pages=True,
+            name=name,
+            sections=sections,
+            needs_pdf_pages=needs_pdf,
         ))
-    for i, bin_sections in enumerate(bins):
-        tasks.append(WriterTask(
-            name=f"writer-text-{i}",
-            sections=bin_sections,
-            needs_pdf_pages=False,
-        ))
-
     return tasks

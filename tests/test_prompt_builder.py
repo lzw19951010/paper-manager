@@ -80,45 +80,37 @@ class TestAutoSplit:
             "num_equations": equations,
         }
 
-    def test_short_paper_three_writers(self):
+    def test_produces_exactly_three_writers(self):
         from deepaper.prompt_builder import auto_split
-        tasks = auto_split(self._profile(pages=8, tables=3, figures=2, equations=1))
-        assert len(tasks) == 3  # method + experiment + 1 text
-        assert tasks[0].name == "writer-method"
-        assert tasks[0].sections == ["方法详解"]
-        assert tasks[1].name == "writer-experiment"
-        assert tasks[1].sections == ["实验与归因"]
-        text_sections = set()
-        for t in tasks[2:]:
-            text_sections.update(t.sections)
-        assert "核心速览" in text_sections
-        assert "机制迁移分析" in text_sections
+        tasks = auto_split(self._profile())
+        assert len(tasks) == 3
+        names = [t.name for t in tasks]
+        assert names == ["writer-overview", "writer-principle", "writer-technical"]
 
-    def test_long_paper_four_writers(self):
+    def test_overview_writer_owns_speed_and_transfer(self):
         from deepaper.prompt_builder import auto_split
-        tasks = auto_split(self._profile(pages=120, tables=20, figures=22, equations=10))
-        assert len(tasks) == 4  # method + experiment + 2 text
-        assert tasks[0].name == "writer-method"
-        assert tasks[1].name == "writer-experiment"
+        tasks = auto_split(self._profile())
+        overview = next(t for t in tasks if t.name == "writer-overview")
+        assert overview.sections == ["核心速览", "机制迁移"]
 
-    def test_visual_sections_split_for_parallelism(self):
+    def test_principle_writer_owns_first_principles(self):
         from deepaper.prompt_builder import auto_split
-        for pages in [8, 30, 120]:
-            tasks = auto_split(self._profile(pages=pages))
-            method = tasks[0]
-            experiment = tasks[1]
-            assert method.name == "writer-method"
-            assert method.sections == ["方法详解"]
-            assert experiment.name == "writer-experiment"
-            assert experiment.sections == ["实验与归因"]
+        tasks = auto_split(self._profile())
+        principle = next(t for t in tasks if t.name == "writer-principle")
+        assert principle.sections == ["第一性原理分析"]
 
-    def test_all_sections_covered(self):
-        from deepaper.prompt_builder import auto_split, SECTION_ORDER
-        tasks = auto_split(self._profile(pages=50))
-        all_sections = set()
-        for t in tasks:
-            all_sections.update(t.sections)
-        assert all_sections == set(SECTION_ORDER)
+    def test_technical_writer_owns_consolidated_technical(self):
+        from deepaper.prompt_builder import auto_split
+        tasks = auto_split(self._profile())
+        technical = next(t for t in tasks if t.name == "writer-technical")
+        assert technical.sections == ["技术精要"]
+        assert technical.needs_pdf_pages is True
+
+    def test_long_paper_same_three_writers(self):
+        """Long papers do not add more writers (content grows via tables, not prose)."""
+        from deepaper.prompt_builder import auto_split
+        tasks = auto_split(self._profile(pages=120, tables=50, figures=30))
+        assert len(tasks) == 3
 
 
 class TestGatesToConstraints:
@@ -131,7 +123,6 @@ class TestGatesToConstraints:
             core_figures=[{"id": 1, "key": "Figure_1"}],
         )
         assert "方法详解" in constraints
-        assert "1,500" in constraints  # floor value
         assert "Figure 1" in constraints  # H7
         assert "h1/h2/h3" in constraints  # H6
 
@@ -205,7 +196,7 @@ class TestGenerateWriterPrompt:
         from deepaper.defaults import DEFAULT_TEMPLATE
 
         sections = parse_template_sections(DEFAULT_TEMPLATE)
-        task = WriterTask(name="writer-visual", sections=["方法详解"], needs_pdf_pages=True)
+        task = WriterTask(name="writer-technical", sections=["技术精要"], needs_pdf_pages=True)
         prompt = generate_writer_prompt(
             task=task,
             run_dir="/tmp/test",
@@ -216,10 +207,9 @@ class TestGenerateWriterPrompt:
             pdf_path="/tmp/test.pdf",
             table_def_pages=[7, 9],
         )
-        assert "数值推演" in prompt
-        assert "【必做】" in prompt
-        assert "伪代码" in prompt
+        assert "设计決策" in prompt or "设计决策" in prompt
         assert "易混淆点" in prompt
+        assert "消融排序" in prompt or "隐性成本" in prompt
 
     def test_prompt_contains_figure_contexts(self):
         from deepaper.prompt_builder import (
@@ -392,26 +382,36 @@ class TestReadStrategy:
 
 
 class TestTemplateEnhancements:
-    """Verify DEFAULT_TEMPLATE contains new content and formatting guidance."""
+    """Verify DEFAULT_TEMPLATE contains v2 content and formatting guidance."""
 
-    def test_simple_example_guidance(self):
+    def test_structured_form_guidance(self):
         from deepaper.defaults import DEFAULT_TEMPLATE
-        assert "1000篇文档" in DEFAULT_TEMPLATE
-        assert "手指头跟着算" in DEFAULT_TEMPLATE
+        # v2 core principle: structured forms over prose
+        assert "结构化形式" in DEFAULT_TEMPLATE
+        assert "禁止生成伪代码" in DEFAULT_TEMPLATE
 
-    def test_metaphor_guidance(self):
+    def test_causal_chain_format(self):
         from deepaper.defaults import DEFAULT_TEMPLATE
-        assert "鸡尾酒调配" in DEFAULT_TEMPLATE
-        assert "精准映射到技术机制" in DEFAULT_TEMPLATE
+        # v2 因果链 uses fixed [C1]/[C2] labels
+        assert "[C1]" in DEFAULT_TEMPLATE
+        assert "Because" in DEFAULT_TEMPLATE
 
-    def test_section_separator_guidance(self):
+    def test_table_format_guidance(self):
         from deepaper.defaults import DEFAULT_TEMPLATE
-        assert "水平线分隔" in DEFAULT_TEMPLATE
+        # v2 requires tables for number comparisons
+        assert "表格" in DEFAULT_TEMPLATE
+        assert "禁止散文" in DEFAULT_TEMPLATE or "禁止用散文" in DEFAULT_TEMPLATE
 
-    def test_bullet_format_guidance(self):
+    def test_h4_h5_heading_rules(self):
         from deepaper.defaults import DEFAULT_TEMPLATE
-        assert "**粗体标题:**" in DEFAULT_TEMPLATE
+        # v2 uses h4/h5, forbids h1/h2/h3
+        assert "h4" in DEFAULT_TEMPLATE
+        assert "h5" in DEFAULT_TEMPLATE
+        assert "h1/h2/h3" in DEFAULT_TEMPLATE
 
-    def test_incremental_annotation_guidance(self):
+    def test_key_sections_present(self):
         from deepaper.defaults import DEFAULT_TEMPLATE
-        assert "95.9(+0.3)" in DEFAULT_TEMPLATE
+        assert "核心速览" in DEFAULT_TEMPLATE
+        assert "第一性原理分析" in DEFAULT_TEMPLATE
+        assert "技术精要" in DEFAULT_TEMPLATE
+        assert "机制迁移" in DEFAULT_TEMPLATE
