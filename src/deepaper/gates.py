@@ -493,6 +493,37 @@ def check_number_fingerprint(
 
 
 # ===========================================================================
+# H11: Core Figures Embedded (image syntax)
+# ===========================================================================
+
+def check_core_figures_embedded(md: str, core_figures: list[dict]) -> dict:
+    """Check every core figure is embedded with image syntax.
+
+    Requires ``![...](./assets/figure-<id>.png)`` — bare text references
+    like ``Figure N`` do NOT satisfy this gate (that's H7's job).
+
+    Returns ``{passed, missing}``.
+    """
+    if not core_figures:
+        return {"passed": True, "missing": []}
+
+    body = _extract_body(md)
+    missing: list[str] = []
+
+    for fig in core_figures:
+        fig_id = fig.get("id", "")
+        key = fig.get("key", f"Figure_{fig_id}")
+        # Match ![any alt text](./assets/figure-<id>.png)
+        pattern = re.compile(
+            rf"!\[.*?\]\(\./assets/figure-{re.escape(str(fig_id))}\.png\)"
+        )
+        if not pattern.search(body):
+            missing.append(key)
+
+    return {"passed": len(missing) == 0, "missing": missing}
+
+
+# ===========================================================================
 # Orchestrator
 # ===========================================================================
 
@@ -555,6 +586,12 @@ def run_hard_gates(
         results["H10"] = check_figure_ref_density(merged_md, core_figures)
     else:
         results["H10"] = dict(_SKIPPED)
+
+    # H11: Core Figures Embedded (image syntax) — v2.1
+    if core_figures:
+        results["H11"] = check_core_figures_embedded(merged_md, core_figures)
+    else:
+        results["H11"] = dict(_SKIPPED)
 
     failed = [name for name, res in results.items() if not res.get("passed")]
     return {
