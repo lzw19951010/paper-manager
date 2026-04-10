@@ -436,6 +436,17 @@ def extract(
     core_tables = identify_core_tables(registry_data, int_text, profile["total_pages"])
     safe_write_json(str(run_dir / "core_tables.json"), core_tables)
 
+    # v2.1: extract core figure images
+    from deepaper.extractor import extract_core_figure_images
+    figures_dir = run_dir / "figures"
+    fig_result = extract_core_figure_images(
+        pdf_path=str(pdf_path),
+        core_figures=core_figs,
+        output_dir=str(figures_dir),
+    )
+    if fig_result.get("warning"):
+        typer.echo(f"Warning: {fig_result['warning']}", err=True)
+
     table_def_pages = sorted(set(
         v["definition_page"] for v in registry_data.values()
         if v.get("type") == "Table" and v.get("definition_page")
@@ -450,6 +461,7 @@ def extract(
         "core_figures": [cf["key"] for cf in core_figs],
         "core_tables": [ct["key"] for ct in core_tables],
         "table_def_pages": table_def_pages,
+        "figures_extracted": fig_result["extracted"],
     }, ensure_ascii=False, indent=2))
 
 

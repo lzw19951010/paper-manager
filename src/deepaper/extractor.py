@@ -270,3 +270,72 @@ def audit_coverage(
         "coverage_ratio": coverage_ratio,
         "uncovered_segments": uncovered,
     }
+
+
+# ===========================================================================
+# Core figure image extraction (v2.1)
+# ===========================================================================
+
+def extract_core_figure_images(
+    pdf_path: str,
+    core_figures: list[dict],
+    output_dir: str,
+) -> dict:
+    """Render PDF pages containing core figures as PNG images.
+
+    Uses pdftoppm to rasterize whole pages at 150 DPI. Falls back
+    gracefully if pdftoppm is unavailable.
+
+    Returns {extracted: int, files: list[str], warning: str | None}.
+    """
+    import subprocess
+    from pathlib import Path
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    extracted = 0
+    files: list[str] = []
+
+    for fig in core_figures:
+        fig_id = fig.get("id", "")
+        page = fig.get("page")
+        if not page:
+            continue
+
+        output_prefix = str(out / f"_tmp_fig{fig_id}")
+        output_file = out / f"figure-{fig_id}.png"
+
+        try:
+            subprocess.run(
+                [
+                    "pdftoppm",
+                    "-f", str(page),
+                    "-l", str(page),
+                    "-r", "150",
+                    "-png",
+                    "-singlefile",
+                    pdf_path,
+                    output_prefix,
+                ],
+                capture_output=True,
+                check=True,
+                timeout=30,
+            )
+        except FileNotFoundError:
+            return {
+                "extracted": extracted,
+                "files": files,
+                "warning": "pdftoppm not found; install poppler-utils",
+            }
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+
+        # pdftoppm with -singlefile outputs <prefix>.png
+        rendered = Path(f"{output_prefix}.png")
+        if rendered.exists():
+            rendered.rename(output_file)
+            files.append(str(output_file))
+            extracted += 1
+
+    return {"extracted": extracted, "files": files, "warning": None}
