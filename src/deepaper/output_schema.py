@@ -116,3 +116,7 @@ H2_MIN_COVERAGE = 0.6
 H8_SKIP_WHEN_NO_DEFINITION_PAGES = True
 H8_UNTRACED_THRESHOLD = 0.3
 H8_TOLERANCE = 0.15
+
+# H12: Section-bucket coverage — minimum fraction of top-level sections
+# that must have at least one page/figure/table reference in the output.
+H12_MIN_BUCKET_COVERAGE = 0.8

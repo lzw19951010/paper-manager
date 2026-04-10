@@ -21,6 +21,7 @@ from deepaper.output_schema import (
     H8_SKIP_WHEN_NO_DEFINITION_PAGES,
     H8_TOLERANCE,
     H8_UNTRACED_THRESHOLD,
+    H12_MIN_BUCKET_COVERAGE,
     HEADING_FORBIDDEN,
 )
 
@@ -524,6 +525,58 @@ def check_core_figures_embedded(md: str, core_figures: list[dict]) -> dict:
 
 
 # ===========================================================================
+# H12: Section-Bucket Coverage (v2.1, replaces H2)
+# ===========================================================================
+
+# Regex to find page references: p.5, p.47, page 5, Page 47
+_PAGE_REF_RE = re.compile(r"(?:p\.|page\s+)(\d+)", re.IGNORECASE)
+
+
+def check_section_bucket_coverage(
+    merged: str,
+    paper_profile: dict,
+) -> dict:
+    """Check output references pages from >= 80% of top-level sections.
+
+    For each top-level section (identified by page range), check if the
+    output contains any page reference (p.NN) where NN falls in that
+    section's page range.
+
+    Returns {passed, coverage, uncovered, total_sections}.
+    """
+    sections = paper_profile.get("top_level_sections", [])
+    if not sections:
+        return {"passed": True, "skipped": True, "reason": "no top_level_sections"}
+
+    body = _extract_body(merged)
+
+    # Extract all page numbers referenced in the output
+    referenced_pages: set[int] = set()
+    for m in _PAGE_REF_RE.finditer(body):
+        referenced_pages.add(int(m.group(1)))
+
+    # Check each section bucket
+    uncovered: list[str] = []
+    for sec in sections:
+        page_start = sec["page_start"]
+        page_end = sec["page_end"]
+        covered = any(page_start <= p <= page_end for p in referenced_pages)
+        if not covered:
+            uncovered.append(sec["title"])
+
+    total = len(sections)
+    covered_count = total - len(uncovered)
+    coverage = covered_count / total if total > 0 else 1.0
+
+    return {
+        "passed": coverage >= H12_MIN_BUCKET_COVERAGE,
+        "coverage": round(coverage, 4),
+        "uncovered": uncovered,
+        "total_sections": total,
+    }
+
+
+# ===========================================================================
 # Orchestrator
 # ===========================================================================
 
@@ -533,11 +586,14 @@ def run_hard_gates(
     core_figures: list[dict],
     text_by_page: dict[int, str] | None,
     registry: dict | None,
+    paper_profile: dict | None = None,  # NEW — v2.1
 ) -> dict:
-    """Run all hard gates (H1-H10). Return summary dict.
+    """Run all hard gates (H1-H12). Return summary dict.
 
     When ``text_by_page`` or ``registry`` is None, gates H4, H7, and H8
     are skipped (marked ``{"passed": True, "skipped": True}``).
+    H2 is permanently skipped (replaced by H12).
+    H12 is skipped when ``paper_profile`` is None or has no top_level_sections.
 
     Returns ``{passed, results, failed}`` where *failed* lists gate names
     that did not pass.
@@ -549,8 +605,8 @@ def run_hard_gates(
     # H1: Baselines Format
     results["H1"] = check_baselines_format(merged_md)
 
-    # H2: Structural Coverage
-    results["H2"] = check_structural_coverage(merged_md, coverage_checklist)
+    # H2: SKIPPED (v2.1 — replaced by H12 section-bucket coverage)
+    results["H2"] = dict(_SKIPPED)
 
     # H3: Section existence (v2 — replaces char-floor check)
     results["H3"] = check_sections_exist(merged_md)
@@ -592,6 +648,12 @@ def run_hard_gates(
         results["H11"] = check_core_figures_embedded(merged_md, core_figures)
     else:
         results["H11"] = dict(_SKIPPED)
+
+    # H12: Section-bucket coverage (v2.1, replaces H2)
+    if paper_profile:
+        results["H12"] = check_section_bucket_coverage(merged_md, paper_profile)
+    else:
+        results["H12"] = dict(_SKIPPED)
 
     failed = [name for name, res in results.items() if not res.get("passed")]
     return {

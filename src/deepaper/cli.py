@@ -368,15 +368,20 @@ def gates(
     from deepaper.registry import build_coverage_checklist, identify_core_figures, compute_paper_profile
     checklist = {}
     core_figures = []
+    profile = safe_read_json(str(run_dir / "paper_profile.json"), {})
     if text_by_page and registry_data:
-        profile = compute_paper_profile(text_by_page, registry_data)
+        computed_profile = compute_paper_profile(text_by_page, registry_data)
+        # Merge: prefer pre-saved profile (has top_level_sections from Task 1),
+        # fall back to freshly computed values for any missing keys.
+        profile = {**computed_profile, **profile} if profile else computed_profile
         core_figures = identify_core_figures(registry_data, text_by_page, profile["total_pages"])
         checklist = build_coverage_checklist(
             text_by_page, registry_data, profile.get("subsection_headings", [])
         )
 
     from deepaper.gates import run_hard_gates
-    result = run_hard_gates(merged_md, checklist, core_figures, text_by_page, registry_data)
+    result = run_hard_gates(merged_md, checklist, core_figures, text_by_page, registry_data,
+                            paper_profile=profile or None)
 
     result_json = json.dumps(result, ensure_ascii=False, indent=2)
     (run_dir / "gates.json").write_text(result_json, encoding="utf-8")
